@@ -36,7 +36,7 @@ public class AdminTagController {
     @Operation(summary = "제품 등록 + 태그(QR) 일괄 생성", description = "제품 정보를 입력받아 productId 1건과 tagCode/authCode N건을 일괄 생성합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "생성 성공"),
-        @ApiResponse(responseCode = "401", description = "관리자 키 없음/불일치 (AUTH_003)",
+        @ApiResponse(responseCode = "401", description = "관리자 키 없음/불일치 (ADMIN_KEY_INVALID)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PostMapping("/tags/bulk-create")
@@ -53,7 +53,7 @@ public class AdminTagController {
     @Operation(summary = "QR 이미지 단건 조회", description = "tagCode를 인코딩한 QR PNG 이미지를 즉석 생성해 반환합니다.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "PNG 이미지"),
-        @ApiResponse(responseCode = "404", description = "존재하지 않는 태그 (TAG_001)",
+        @ApiResponse(responseCode = "404", description = "존재하지 않는 태그 (TAG_NOT_FOUND)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @GetMapping(value = "/qr/{tagCode}", produces = MediaType.IMAGE_PNG_VALUE)
@@ -84,7 +84,7 @@ public class AdminTagController {
     )
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "변경 성공"),
-        @ApiResponse(responseCode = "404", description = "존재하지 않는 태그 (TAG_001)",
+        @ApiResponse(responseCode = "404", description = "존재하지 않는 태그 (TAG_NOT_FOUND)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PostMapping("/tags/{tagCode}/force-status")

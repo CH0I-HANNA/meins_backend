@@ -3,13 +3,16 @@ package com.mcm.onboarding.domain.admin.service;
 import com.mcm.onboarding.common.exception.BusinessException;
 import com.mcm.onboarding.common.exception.ErrorCode;
 import com.mcm.onboarding.common.util.CodeNormalizer;
+import com.mcm.onboarding.common.util.KstTime;
 import com.mcm.onboarding.domain.admin.dto.AdminTagResponse;
 import com.mcm.onboarding.domain.admin.dto.BulkCreateRequest;
 import com.mcm.onboarding.domain.admin.dto.BulkCreateResponse;
 import com.mcm.onboarding.domain.admin.dto.ForceStatusRequest.ForceStatusAction;
+import com.mcm.onboarding.domain.chat.entity.ChatCredit;
 import com.mcm.onboarding.domain.chat.repository.ChatCreditRepository;
 import com.mcm.onboarding.domain.chat.repository.ChatMessageRepository;
 import com.mcm.onboarding.domain.ownership.entity.OwnershipRecord;
+import com.mcm.onboarding.domain.ownership.repository.OwnershipAttemptRepository;
 import com.mcm.onboarding.domain.ownership.repository.OwnershipRepository;
 import com.mcm.onboarding.domain.product.entity.Product;
 import com.mcm.onboarding.domain.product.repository.ProductRepository;
@@ -22,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.security.SecureRandom;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.ZipEntry;
@@ -43,6 +47,7 @@ public class AdminTagService {
     private final ProductRepository productRepository;
     private final TagRepository tagRepository;
     private final OwnershipRepository ownershipRepository;
+    private final OwnershipAttemptRepository ownershipAttemptRepository;
     private final ChatCreditRepository chatCreditRepository;
     private final ChatMessageRepository chatMessageRepository;
     private final QrCodeService qrCodeService;
@@ -73,13 +78,11 @@ public class AdminTagService {
     }
 
     public List<AdminTagResponse> listTags() {
+        LocalDateTime now = KstTime.now();
         return tagRepository.findAll().stream()
-            .map(tag -> {
-                boolean locked = ownershipRepository.findByTag_TagCode(tag.getTagCode())
-                    .map(OwnershipRecord::isLocked)
-                    .orElse(false);
-                return AdminTagResponse.of(tag, locked);
-            })
+            // 잠금은 (태그, IP)별이므로 "현재 잠긴 시도 이력이 하나라도 있으면" 잠김으로 표시한다.
+            .map(tag -> AdminTagResponse.of(tag,
+                ownershipAttemptRepository.existsByTagCodeAndLockedUntilAfter(tag.getTagCode(), now)))
             .toList();
     }
 
@@ -100,7 +103,7 @@ public class AdminTagService {
             zip.finish();
             return buffer.toByteArray();
         } catch (IOException e) {
-            throw new BusinessException(ErrorCode.INTERNAL_SERVER_ERROR);
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR);
         }
     }
 
@@ -109,28 +112,32 @@ public class AdminTagService {
         Tag tag = findTagOrThrow(tagCode);
         String canonicalTagCode = tag.getTagCode();
         OwnershipRecord record = ownershipRepository.findByTag_TagCode(canonicalTagCode)
-            .orElseThrow(() -> new BusinessException(ErrorCode.INTERNAL_SERVER_ERROR));
+            .orElseThrow(() -> new BusinessException(ErrorCode.INTERNAL_ERROR));
+
+        LocalDateTime now = KstTime.now();
 
         switch (action) {
-            case UNLOCK -> record.unlock();
+            // 잠금 해제 = 해당 태그에 쌓인 (태그, IP) 시도 이력을 모두 제거
+            case UNLOCK -> ownershipAttemptRepository.deleteByTagCode(canonicalTagCode);
             case UNLOCK_RECOVERY -> {
+                ownershipAttemptRepository.deleteByTagCode(canonicalTagCode);
                 record.resetForRecovery();
                 tag.markUnregistered();
             }
             case REGISTERED -> {
                 tag.markRegistered();
-                record.markRegistered("ADMIN_FORCED");
+                record.markRegistered("ADMIN_FORCED", now);
                 chatCreditRepository.findByTagCode(canonicalTagCode)
-                    .orElseGet(() -> chatCreditRepository.save(
-                        com.mcm.onboarding.domain.chat.entity.ChatCredit.init(canonicalTagCode)));
+                    .orElseGet(() -> chatCreditRepository.save(ChatCredit.init(canonicalTagCode, now)));
             }
             case UNREGISTERED -> {
                 tag.markUnregistered();
                 record.resetForRecovery();
+                ownershipAttemptRepository.deleteByTagCode(canonicalTagCode);
                 chatCreditRepository.deleteByTagCode(canonicalTagCode);
                 chatMessageRepository.deleteByTagCode(canonicalTagCode);
             }
-            default -> throw new BusinessException(ErrorCode.INVALID_FORCE_STATUS_ACTION);
+            default -> throw new BusinessException(ErrorCode.ADMIN_INVALID_ACTION);
         }
     }
 

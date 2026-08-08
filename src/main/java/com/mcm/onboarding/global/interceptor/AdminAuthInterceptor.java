@@ -21,7 +21,7 @@ public class AdminAuthInterceptor implements HandlerInterceptor {
         String providedKey = request.getHeader(ADMIN_KEY_HEADER);
 
         if (providedKey == null || providedKey.isBlank() || !providedKey.equals(adminApiKey)) {
-            throw new BusinessException(ErrorCode.INVALID_ADMIN_KEY);
+            throw new BusinessException(ErrorCode.ADMIN_KEY_INVALID);
         }
 
         return true;

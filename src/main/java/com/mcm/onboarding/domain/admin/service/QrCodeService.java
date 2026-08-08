@@ -31,7 +31,7 @@ public class QrCodeService {
             MatrixToImageWriter.writeToStream(matrix, "PNG", out);
             return out.toByteArray();
         } catch (WriterException | IOException e) {
-            throw new BusinessException(ErrorCode.INTERNAL_SERVER_ERROR);
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR);
         }
     }
 }
