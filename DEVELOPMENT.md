@@ -76,7 +76,7 @@ Layer 3 (실행)       LlmWebClient.streamCompletion() → SseEmitter로 청크 
 - **크레딧 차감**: 스트림이 정상 완료(`onComplete`)되든 에러로 끝나든(`onError`) 양쪽 콜백에서 모두 `deductCredit()`을 호출해 "1턴당 1회 차감"을 보장한다. 차감 자체는 `@Transactional`이 붙은 원자적 UPDATE(`remaining = remaining - 1 WHERE remaining > 0`)로 처리된다.
 - **연결 끊김(Abort) 대응**: `emitter.onCompletion/onTimeout/onError`에서 모두 `subscription.dispose()`를 호출해, 클라이언트가 연결을 끊어도 서버가 붙잡고 있던 LLM WebClient 구독을 즉시 취소한다. 불필요한 LLM 비용 지출을 막기 위한 장치.
 - `LlmWebClient`는 현재 실제 LLM 호출 대신 더미 텍스트를 150ms 간격으로 스트리밍하는 자리표시자 구현이며, 코드 내 주석으로 실제 OpenAI `/chat/completions` 스트리밍 연동 예시가 남겨져 있다.
-- `GET /api/tags/{tagCode}/chat/history` — 오너 전용. `{ messages: [{role, content, createdAt}], credits: { remaining, limit } }` 형태로 대화 내역과 크레딧 잔량을 함께 반환한다(프론트는 `remaining <= 2`일 때 안내 문구를 띄운다). 크레딧 회복 정책이 미확정이라 `credits.resetAt`은 현재 항상 생략된다. **대화 내역 저장 로직이 아직 연결되지 않아 `messages`는 항상 빈 배열이다.**
+- `GET /api/tags/{tagCode}/chat/history` — 오너 전용. `{ messages: [{role, content, createdAt}], credits: { remaining, limit } }` 형태로 대화 내역과 크레딧 잔량을 함께 반환한다(프론트는 `remaining <= 2`일 때 안내 문구를 띄운다). 크레딧 회복 정책이 미확정이라 `credits.resetAt`은 현재 항상 생략된다. `messages`는 `tagCode` 기준으로 서버에 저장된 실제 대화 내역이다(재진입 시 복원됨).
 
 ## 4. 인증
 
@@ -152,9 +152,6 @@ Layer 3 (실행)       LlmWebClient.streamCompletion() → SseEmitter로 청크 
 
 ## 8. 미완성 / TODO
 
-기획 명세 대비 남은 갭의 전체 목록과 우선순위는 `SPEC_ALIGNMENT.md`의 B절을 참고. 요약하면:
-
-- **챗 메시지 저장 미연결** — `ChatMessage.of()`가 어디서도 호출되지 않아 `/chat/history`의 `messages`가 항상 빈 배열.
 - `LlmWebClient`: 더미 스트리밍 → 실제 OpenAI(or 다른 LLM) 스트리밍 API로 교체 필요 (연동 예시 코드는 주석으로 이미 준비됨).
 - **크레딧 자동 회복(롤링 리셋) 없음** — 회복 주기가 미확정이라 구현하지 않았다. 확정되면 `credits.resetAt`과 `CREDIT_EXHAUSTED`의 `resetAt`을 함께 채운다.
 - **IP 시간당 상한(`RATE_LIMITED`) 미구현**, **CORS 설정 없음**.

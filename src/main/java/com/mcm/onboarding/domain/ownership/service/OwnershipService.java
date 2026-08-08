@@ -101,7 +101,10 @@ public class OwnershipService {
         throw new BusinessException(originalError);
     }
 
-    private String hashIp(String ip) {
+    private String hashIp(String rawIp) {
+        // X-Forwarded-For는 "client, proxy1, proxy2" 형태로 올 수 있다. 전체 문자열을 그대로 해싱하면
+        // 프록시 체인 길이/공백 차이만으로 같은 클라이언트가 다른 해시를 갖게 되어 잠금 키가 불안정해진다.
+        String ip = rawIp.split(",")[0].trim();
         try {
             byte[] hash = MessageDigest.getInstance("SHA-256").digest(ip.getBytes());
             return HexFormat.of().formatHex(hash);

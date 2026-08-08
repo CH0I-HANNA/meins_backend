@@ -66,7 +66,7 @@ public class ChatController {
         description = """
             해당 태그의 전체 대화 내역을 시간순으로 반환합니다. Bearer 토큰 필수.
 
-            이력은 서버에 저장되며 `(tagCode, ownerToken)` 기준으로 묶입니다 — 기기를 바꿔도 복원됩니다.
+            이력은 서버에 `tagCode` 기준으로 저장됩니다 — 기기를 바꿔도 복원됩니다.
             `credits.remaining`이 2 이하일 때 프론트가 안내 문구를 띄웁니다.
             """,
         security = @SecurityRequirement(name = "OwnerToken")

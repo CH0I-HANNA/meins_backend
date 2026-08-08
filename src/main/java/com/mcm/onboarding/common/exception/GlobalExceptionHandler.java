@@ -24,9 +24,11 @@ public class GlobalExceptionHandler {
     }
 
     // Bean Validation 실패도 공통 포맷으로 내린다 (기본 Spring 응답은 { code, message, traceId } 형태가 아니므로).
+    // 이 핸들러는 모든 @Valid 엔드포인트(소유권 등록뿐 아니라 관리자 API도)에 공통 적용되므로
+    // 소유권 등록 전용 의미인 CODE_MISMATCH로 매핑하면 안 된다 — 일반 검증 실패 코드를 쓴다.
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidationException(MethodArgumentNotValidException e) {
-        ErrorCode ec = ErrorCode.CODE_MISMATCH;
+        ErrorCode ec = ErrorCode.VALIDATION_FAILED;
         return ResponseEntity.status(ec.getHttpStatus())
             .body(ErrorResponse.of(ec.getCode(), ec.getMessage(), null, null, null));
     }

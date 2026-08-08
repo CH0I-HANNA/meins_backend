@@ -42,13 +42,16 @@ public class ChatMessage {
     @Schema(description = "메시지 생성 시각", example = "2026-08-06T20:00:00")
     private LocalDateTime createdAt;
 
-    public static ChatMessage of(String tagCode, String role, String content, String preset) {
+    // createdAt은 호출부에서 KstTime.now()로 받는다. 여기서 LocalDateTime.now()(JVM 기본 타임존)를 쓰면
+    // 서버가 KST가 아닌 환경(예: UTC 컨테이너)에서 돌 때 KstTime.toIso()가 실제 UTC 시각에 +09:00을
+    // 잘못 붙이는 결과가 된다.
+    public static ChatMessage of(String tagCode, String role, String content, String preset, LocalDateTime createdAt) {
         ChatMessage msg = new ChatMessage();
         msg.tagCode = tagCode;
         msg.role = role;
         msg.content = content;
         msg.preset = preset;
-        msg.createdAt = LocalDateTime.now();
+        msg.createdAt = createdAt;
         return msg;
     }
 }

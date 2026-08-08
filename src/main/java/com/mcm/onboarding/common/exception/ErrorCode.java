@@ -26,6 +26,10 @@ public enum ErrorCode {
     ADMIN_KEY_INVALID(HttpStatus.UNAUTHORIZED, "ADMIN_KEY_INVALID", "유효하지 않은 관리자 키입니다."),
     ADMIN_INVALID_ACTION(HttpStatus.BAD_REQUEST, "ADMIN_INVALID_ACTION", "지원하지 않는 force-status action입니다."),
 
+    // 명세 범위 밖(모든 @Valid 엔드포인트 공통) — 소유권 등록의 CODE_MISMATCH(인증 코드 불일치, 비즈니스 로직)와는
+    // 별개로, Bean Validation 자체가 실패했을 때(필수값 누락 등) 쓰는 일반 코드.
+    VALIDATION_FAILED(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", "요청 값이 올바르지 않습니다."),
+
     // Server
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "서버 내부 오류가 발생했습니다.");
 

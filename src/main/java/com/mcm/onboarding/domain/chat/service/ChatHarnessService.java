@@ -3,6 +3,7 @@ package com.mcm.onboarding.domain.chat.service;
 import com.mcm.onboarding.common.exception.BusinessException;
 import com.mcm.onboarding.common.exception.ErrorCode;
 import com.mcm.onboarding.common.util.CodeNormalizer;
+import com.mcm.onboarding.common.util.KstTime;
 import com.mcm.onboarding.domain.chat.client.LlmWebClient;
 import com.mcm.onboarding.domain.chat.dto.ChatHistoryResponse;
 import com.mcm.onboarding.domain.chat.dto.ChatRequest;
@@ -50,7 +51,7 @@ public class ChatHarnessService {
         // 사용자 발화는 LLM 호출을 실제로 시도하는 시점에 남긴다.
         // free-text가 없으면(preset만 전송) 칩 라벨을 그대로 기록해 히스토리에서 빈 말풍선이 없게 한다.
         chatMessageRepository.save(
-            ChatMessage.of(tagCode, "user", resolveUserContent(request), request.preset())
+            ChatMessage.of(tagCode, "user", resolveUserContent(request), request.preset(), KstTime.now())
         );
 
         SseEmitter emitter = new SseEmitter(60_000L);
@@ -74,7 +75,7 @@ public class ChatHarnessService {
                 () -> {
                     creditGuardService.deductCredit(tagCode); // 정상 종료 시 차감
                     chatMessageRepository.save(
-                        ChatMessage.of(tagCode, "assistant", assistantContent.toString(), request.preset())
+                        ChatMessage.of(tagCode, "assistant", assistantContent.toString(), request.preset(), KstTime.now())
                     );
                     emitter.complete();
                 }
