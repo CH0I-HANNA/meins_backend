@@ -43,6 +43,14 @@ public class ChatHarnessService {
     public SseEmitter streamChat(String rawTagCode, ChatRequest request) {
         String tagCode = CodeNormalizer.normalize(rawTagCode);
 
+        // 명세상 message 또는 preset 중 하나는 반드시 있어야 한다. 검증 없이 통과시키면 빈 바디도
+        // 크레딧을 소모하고 "(빈 메시지)"로 LLM을 호출하게 된다 — LLM 호출/차감 전에 걸러낸다.
+        boolean noMessage = request.message() == null || request.message().isBlank();
+        boolean noPreset = request.preset() == null || request.preset().isBlank();
+        if (noMessage && noPreset) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED);
+        }
+
         // ── Layer 1: 가드레일 — 크레딧 체크 + 원자적 선차감 (LLM 미호출 조건 먼저 확인) ──
         creditGuardService.checkCredit(tagCode);
         creditGuardService.reserveCredit(tagCode);
