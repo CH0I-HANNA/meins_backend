@@ -20,6 +20,7 @@ import reactor.core.Disposable;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Service
 @RequiredArgsConstructor
@@ -57,6 +58,9 @@ public class ChatHarnessService {
 
         SseEmitter emitter = new SseEmitter(60_000L);
         StringBuilder assistantContent = new StringBuilder();
+        // subscribe()가 반환하는 Disposable을 subscribe() 내부(onNext)에서도 즉시 취소하려면
+        // 대입 완료 전에 참조해야 하는 순환이 생긴다 — 참조를 담을 그릇을 미리 만들어 우회한다.
+        AtomicReference<Disposable> subscriptionRef = new AtomicReference<>();
 
         // ── Layer 3: LLM 스트리밍 실행 ──
         Disposable subscription = llmWebClient.streamCompletion(systemPrompt, request.message())
@@ -66,7 +70,14 @@ public class ChatHarnessService {
                     try {
                         emitter.send(SseEmitter.event().data(chunk));
                     } catch (IOException e) {
+                        // 클라이언트가 스트림 중간에 연결을 끊은 경우. completeWithError만으로는
+                        // 업스트림 LLM 구독이 즉시 끊기지 않으므로(onCompletion 콜백을 기다려야 함)
+                        // 여기서 바로 dispose해 CLAUDE.md의 "구독 즉시 취소" 요구를 충족한다.
                         emitter.completeWithError(e);
+                        Disposable current = subscriptionRef.get();
+                        if (current != null) {
+                            current.dispose();
+                        }
                     }
                 },
                 error -> emitter.completeWithError(error), // 차감은 reserveCredit()에서 이미 완료됨
@@ -77,6 +88,7 @@ public class ChatHarnessService {
                     emitter.complete();
                 }
             );
+        subscriptionRef.set(subscription);
 
         // Abort 대응: 클라이언트 연결 끊김 시 LLM WebClient 구독 즉시 취소
         emitter.onCompletion(subscription::dispose);
