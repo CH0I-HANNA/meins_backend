@@ -120,13 +120,23 @@ public class ChatHarnessService {
         if (request.message() != null && !request.message().isBlank()) {
             return request.message();
         }
-        return switch (request.preset() != null ? request.preset() : "") {
-            case "care"     -> "케어";
-            case "style"    -> "스타일";
-            case "heritage" -> "헤리티지";
-            default         -> "(빈 메시지)";
+        String label = presetOf(request.preset()).chipLabel();
+        return label != null ? label : "(빈 메시지)";
+    }
+
+    // preset 문자열 → 칩 라벨/시스템 프롬프트 컨텍스트 매핑을 한 곳에만 둔다. 이전엔 이 스위치가
+    // resolveUserContent()와 buildSystemPrompt()에 각각 따로 있어서, preset을 추가/변경할 때
+    // 한쪽만 고치면 채팅 히스토리와 실제 LLM 컨텍스트가 서로 어긋날 수 있었다.
+    private Preset presetOf(String preset) {
+        return switch (preset != null ? preset : "") {
+            case "care"     -> new Preset("케어", "- 사용자 요청 유형: 가방 관리법 및 보관법 안내 [care]");
+            case "style"    -> new Preset("스타일", "- 사용자 요청 유형: 스타일링 및 코디 조언 [style]");
+            case "heritage" -> new Preset("헤리티지", "- 사용자 요청 유형: MCM 브랜드 헤리티지 및 제품 역사 안내 [heritage]");
+            default         -> new Preset(null, "- 사용자 요청 유형: 일반 문의");
         };
     }
+
+    private record Preset(String chipLabel, String systemContext) {}
 
     private String buildSystemPrompt(String tagCode, String preset) {
         Tag tag = tagRepository.findByTagCode(tagCode)
@@ -145,12 +155,7 @@ public class ChatHarnessService {
             - 사이즈(가로x세로x높이): %s
             """.formatted(product.getProductName(), product.getMaterial(), product.getColor(), dimensions);
 
-        String presetContext = switch (preset != null ? preset : "") {
-            case "care"      -> "- 사용자 요청 유형: 가방 관리법 및 보관법 안내 [care]";
-            case "style"     -> "- 사용자 요청 유형: 스타일링 및 코디 조언 [style]";
-            case "heritage"  -> "- 사용자 요청 유형: MCM 브랜드 헤리티지 및 제품 역사 안내 [heritage]";
-            default          -> "- 사용자 요청 유형: 일반 문의";
-        };
+        String presetContext = presetOf(preset).systemContext();
 
         return GUARDRAIL_PROMPT + "\n" + productContext + "\n" + presetContext;
     }
