@@ -17,6 +17,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
@@ -65,7 +66,9 @@ public class OwnershipService {
 
         // 인증 코드 불일치 — 실물을 실제로 가진 사람만 등록 가능하도록 검증.
         // 이미 사용된 코드도 여기서 동일하게 걸리므로 "사용 여부"가 노출되지 않는다(코드 열거 방지).
-        if (!tag.getAuthCode().equals(authCode)) {
+        // 비교도 상수시간으로 해야 타이밍 차이로 코드가 한 글자씩 새는 걸 막는다(5회 잠금이 있어도
+        // 잠금 전 몇 번의 요청만으로 타이밍 샘플을 모을 수 있으므로 방어를 겹쳐둔다).
+        if (!constantTimeEquals(tag.getAuthCode(), authCode)) {
             failAndMaybeLock(attempt, now, ErrorCode.CODE_MISMATCH);
         }
 
@@ -101,10 +104,20 @@ public class OwnershipService {
         throw new BusinessException(originalError);
     }
 
+    private boolean constantTimeEquals(String a, String b) {
+        return MessageDigest.isEqual(
+            a.getBytes(StandardCharsets.UTF_8),
+            b.getBytes(StandardCharsets.UTF_8)
+        );
+    }
+
     private String hashIp(String rawIp) {
-        // X-Forwarded-For는 "client, proxy1, proxy2" 형태로 올 수 있다. 전체 문자열을 그대로 해싱하면
-        // 프록시 체인 길이/공백 차이만으로 같은 클라이언트가 다른 해시를 갖게 되어 잠금 키가 불안정해진다.
-        String ip = rawIp.split(",")[0].trim();
+        // X-Forwarded-For는 "client, proxy1, proxy2" 형태로 올 수 있다. Railway는 신뢰 가능한
+        // 단일 홉으로, 클라이언트가 무엇을 보내든 실제 관측 IP를 맨 뒤에 append한다. 맨 앞(leftmost)
+        // 값은 클라이언트가 자유롭게 조작 가능해 그걸 쓰면 잠금 키(ip_hash)를 마음대로 바꿔가며
+        // 5회 실패 잠금을 무한히 우회할 수 있으므로, 신뢰 가능한 맨 뒤(rightmost) 값을 쓴다.
+        String[] parts = rawIp.split(",");
+        String ip = parts[parts.length - 1].trim();
         try {
             byte[] hash = MessageDigest.getInstance("SHA-256").digest(ip.getBytes());
             return HexFormat.of().formatHex(hash);

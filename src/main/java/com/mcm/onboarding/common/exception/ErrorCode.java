@@ -31,7 +31,11 @@ public enum ErrorCode {
     VALIDATION_FAILED(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", "요청 값이 올바르지 않습니다."),
 
     // Server
-    INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "서버 내부 오류가 발생했습니다.");
+    INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "서버 내부 오류가 발생했습니다."),
+
+    // 동시에 들어온 동일 요청(더블클릭/재시도)이 DB unique 제약에 걸렸을 때. 서버 오류가 아니라
+    // 손님 쪽에서 재시도하면 해결되는 상황이므로 500이 아닌 409로 구분한다.
+    REQUEST_CONFLICT(HttpStatus.CONFLICT, "REQUEST_CONFLICT", "요청이 겹쳤습니다. 잠시 후 다시 시도해주세요.");
 
     private final HttpStatus httpStatus;
     private final String code;

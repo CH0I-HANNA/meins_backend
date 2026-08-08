@@ -2,7 +2,9 @@ package com.mcm.onboarding.common.exception;
 
 import com.mcm.onboarding.common.dto.ErrorResponse;
 import com.mcm.onboarding.common.util.KstTime;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -29,6 +31,25 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidationException(MethodArgumentNotValidException e) {
         ErrorCode ec = ErrorCode.VALIDATION_FAILED;
+        return ResponseEntity.status(ec.getHttpStatus())
+            .body(ErrorResponse.of(ec.getCode(), ec.getMessage(), null, null, null));
+    }
+
+    // 잘못되거나 깨진 JSON 바디는 클라이언트 잘못이므로 400으로 응답한다. 컨트롤러 진입 전
+    // 메시지 컨버터 단계에서 던져지므로 BusinessException/MethodArgumentNotValidException
+    // 어느 쪽도 아니며, 이 핸들러가 없으면 catch-all에 빠져 500으로 나간다.
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleMessageNotReadable(HttpMessageNotReadableException e) {
+        ErrorCode ec = ErrorCode.VALIDATION_FAILED;
+        return ResponseEntity.status(ec.getHttpStatus())
+            .body(ErrorResponse.of(ec.getCode(), ec.getMessage(), null, null, null));
+    }
+
+    // 더블클릭/재시도로 같은 요청이 동시에 들어와 DB unique 제약(예: 소유권 시도 이력)에 걸린
+    // 경우. 서버 결함이 아니라 재시도로 해결되는 상황이므로 500 대신 409로 명확히 구분한다.
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(DataIntegrityViolationException e) {
+        ErrorCode ec = ErrorCode.REQUEST_CONFLICT;
         return ResponseEntity.status(ec.getHttpStatus())
             .body(ErrorResponse.of(ec.getCode(), ec.getMessage(), null, null, null));
     }
