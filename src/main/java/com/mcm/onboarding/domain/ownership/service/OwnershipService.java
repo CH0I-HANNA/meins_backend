@@ -102,9 +102,12 @@ public class OwnershipService {
     }
 
     private String hashIp(String rawIp) {
-        // X-Forwarded-For는 "client, proxy1, proxy2" 형태로 올 수 있다. 전체 문자열을 그대로 해싱하면
-        // 프록시 체인 길이/공백 차이만으로 같은 클라이언트가 다른 해시를 갖게 되어 잠금 키가 불안정해진다.
-        String ip = rawIp.split(",")[0].trim();
+        // X-Forwarded-For는 "client, proxy1, proxy2" 형태로 올 수 있다. Railway는 신뢰 가능한
+        // 단일 홉으로, 클라이언트가 무엇을 보내든 실제 관측 IP를 맨 뒤에 append한다. 맨 앞(leftmost)
+        // 값은 클라이언트가 자유롭게 조작 가능해 그걸 쓰면 잠금 키(ip_hash)를 마음대로 바꿔가며
+        // 5회 실패 잠금을 무한히 우회할 수 있으므로, 신뢰 가능한 맨 뒤(rightmost) 값을 쓴다.
+        String[] parts = rawIp.split(",");
+        String ip = parts[parts.length - 1].trim();
         try {
             byte[] hash = MessageDigest.getInstance("SHA-256").digest(ip.getBytes());
             return HexFormat.of().formatHex(hash);
