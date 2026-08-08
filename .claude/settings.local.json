@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(mysql *)"
+      "Bash(mysql *)",
+      "Bash(./gradlew compileJava -q)"
     ]
   }
 }
