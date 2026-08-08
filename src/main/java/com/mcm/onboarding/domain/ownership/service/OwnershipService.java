@@ -17,6 +17,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
@@ -65,7 +66,9 @@ public class OwnershipService {
 
         // 인증 코드 불일치 — 실물을 실제로 가진 사람만 등록 가능하도록 검증.
         // 이미 사용된 코드도 여기서 동일하게 걸리므로 "사용 여부"가 노출되지 않는다(코드 열거 방지).
-        if (!tag.getAuthCode().equals(authCode)) {
+        // 비교도 상수시간으로 해야 타이밍 차이로 코드가 한 글자씩 새는 걸 막는다(5회 잠금이 있어도
+        // 잠금 전 몇 번의 요청만으로 타이밍 샘플을 모을 수 있으므로 방어를 겹쳐둔다).
+        if (!constantTimeEquals(tag.getAuthCode(), authCode)) {
             failAndMaybeLock(attempt, now, ErrorCode.CODE_MISMATCH);
         }
 
@@ -99,6 +102,13 @@ public class OwnershipService {
             throw BusinessException.codeMismatch(attempt.remainingAttempts());
         }
         throw new BusinessException(originalError);
+    }
+
+    private boolean constantTimeEquals(String a, String b) {
+        return MessageDigest.isEqual(
+            a.getBytes(StandardCharsets.UTF_8),
+            b.getBytes(StandardCharsets.UTF_8)
+        );
     }
 
     private String hashIp(String rawIp) {
