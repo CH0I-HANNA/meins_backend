@@ -19,7 +19,7 @@ QR 코드를 스캔해 명품(MCM) 제품의 소유권을 등록하고, 소유�
 ## 2. 패키지 구조
 
 ```
-com.meins.onboarding
+com.mcm.onboarding
 ├── common
 │   ├── dto/ErrorResponse.java          # { code, message, traceId } 공통 에러 포맷
 │   └── exception/
@@ -172,5 +172,5 @@ Layer 3 (실행)       LlmWebClient.streamCompletion() → SseEmitter로 청크 
 - ~~tagCode/authCode 포맷 표준화~~ — tagCode `XXXX-XXXX`(영문+숫자), authCode `XXXX-XXXX-XXXX`(`0`/`O`/`1`/`I` 제외)로 생성 로직 재작성(`AdminTagService`). 둘 다 대소문자 무시 — `CodeNormalizer` 유틸을 만들어 사용자 입력이 들어오는 모든 지점(컨트롤러 경로변수를 받는 서비스 진입점, 토큰 파싱)에서 대문자로 정규화 후 비교/조회하도록 통일.
 - ~~Product 필드 정리~~ — `onSale`(boolean) → `saleRegisteredYm`(YYYY-MM), `size`(자유 문자열) → `widthCm`/`depthCm`/`heightCm`(정수, cm)로 변경. `BulkCreateRequest`/`TagDetailResponse`/`ChatHarnessService`(시스템 프롬프트의 제품 컨텍스트) 연쇄 반영.
 - ~~소유 등록 시점(`registeredAt`) 노출 + 권한별 정밀도 차등~~ — `TagDetailResponse`에 필드 추가. 게스트(`GET /api/tags/{tagCode}`)는 `YYYY-MM`, 오너(`GET /home`)는 `YYYY-MM-DD HH:mm`로 **서버가** 포맷해서 내려줌 — 프론트가 표시만 다르게 하는 방식이 아니라, 애초에 게스트 응답에는 분단위 정보 자체가 담기지 않음(직접 API 호출로도 우회 불가).
-- ~~서비스명 `meins`로 변경 (폴더/패키지 범위)~~ — Java 패키지 `com.mcm.onboarding` → `com.meins.onboarding`(디렉토리 이동 + package/import 일괄 치환), 진입 클래스 `McmOnboardingApplication` → `MeinsOnboardingApplication`, `settings.gradle`의 `rootProject.name`과 `build.gradle`의 `group`을 `meins`/`com.meins`로 변경, 프로젝트 루트 디렉토리를 `/Users/choehanna/Documents/luxury` → `/Users/choehanna/Documents/meins`로 이동. `.idea/workspace.xml`의 Run Configuration도 새 클래스명으로 갱신.
-- ~~DB 스키마명/애플리케이션명 변경~~ — MySQL 스키마를 `meins_onboarding`으로 새로 만들고 기존 `mcm_onboarding`은 삭제(더미 데이터 1건뿐이라 재생성 방식으로 처리). `spring.datasource.url` 기본값과 `.env`/`.env.example`의 `DB_URL`도 함께 갱신. `spring.application.name`을 `mcm-onboarding` → `meins-onboarding`으로 변경. Swagger/프롬프트의 "MCM" 브랜드 텍스트(실제 판매 제품 브랜드명)는 서비스명과 별개 개념이라 그대로 둠.
+- **서비스명 `meins`로 변경 시도 → 롤백됨 (미완료)** — Java 패키지 `com.mcm.onboarding` → `com.meins.onboarding` 전환을 시도했으나 빌드 에러가 반복 발생해 되돌렸다. 현재 코드는 여전히 `com.mcm.onboarding`이고, `settings.gradle`의 `rootProject.name`(`luxury`), `build.gradle`의 `group`(`com.example`), `spring.application.name`(`mcm-onboarding`)도 그대로다 — 네이밍이 4종류로 혼재된 상태. 재시도 전에 지난번 에러 원인부터 파악할 것.
+- **DB 스키마명/애플리케이션명 변경 시도 → 함께 롤백됨 (미완료)** — 위 패키지 리네임과 같은 작업 단위로 `meins_onboarding` 스키마 생성, `spring.application.name`을 `meins-onboarding`으로 바꾸는 것도 같이 시도했으나 리네임 롤백과 함께 되돌아갔다. 현재 `application.properties`는 여전히 `spring.application.name=mcm-onboarding`, `DB_URL` 기본값도 `mcm_onboarding` 스키마를 가리킨다.
