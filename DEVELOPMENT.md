@@ -45,15 +45,18 @@ com.meins.onboarding
 - `Product`: 관리자가 배치 단위로 등록하는 마스터 정보 — `productName`, `manufacturedYm`(YYYY-MM), `material`, `color`, `saleRegisteredYm`(판매 등록 연월, YYYY-MM), `widthCm`/`depthCm`/`heightCm`(가로/세로/높이, cm 정수).
 - `Tag`: 실물 QR 1개당 1행. `product`(FK), `tagCode`(unique, `XXXX-XXXX` 형식·영문+숫자, QR에 인코딩되는 공개 식별자), `authCode`(unique, `XXXX-XXXX-XXXX` 형식·`0`/`O`/`1`/`I` 제외, 실물에만 인쇄되는 비공개 2차 인증 코드 — 소유권 등록 시 필수 검증), `status`(`UNREGISTERED`/`REGISTERED`, 등록 상태의 단일 진실 공급원).
 - **대소문자 무시**: tagCode/authCode는 항상 대문자로 저장되고, 사용자 입력(경로변수/요청바디/토큰)은 `CodeNormalizer.normalize()`로 대문자 정규화한 뒤 비교·조회한다 — 소문자로 입력해도 동작.
-- `GET /api/tags/{tagCode}` — 인증 불필요. `TagDetailResponse`로 Tag+Product 조인 정보 반환 (`status` 포함, `authCode`는 노출 안 함). 프론트는 이 `status` 값으로 "이미 등록된 제품입니다" 안내 화면과 "인증 코드 입력" 화면을 분기한다. `registeredAt`은 **게스트 정밀도(`YYYY-MM`)**로만 내려간다.
-- `GET /api/tags/{tagCode}/home` — 오너 전용. `OwnerAuthInterceptor` 통과 필요. `registeredAt`은 **오너 정밀도(`YYYY-MM-DD HH:mm`)**로 내려간다.
-- **정밀도 마스킹은 프론트가 아니라 서버가 한다**: `TagService.getTagInfo()`/`getOwnerHome()`이 각각 다른 `DateTimeFormatter`로 `OwnershipRecord.registeredAt`을 포맷해서 응답에 담는다. 게스트 엔드포인트가 애초에 분단위 값을 응답에 넣지 않으므로, 프론트가 표시를 어떻게 하든(또는 API를 직접 호출하든) 오너가 아니면 분단위 시각을 알 수 없다 — "인가된 사람에게만 정밀 데이터를 내려준다"는 원칙을 응답 생성 시점에 강제.
+- `GET /api/tags/{tagCode}` — 인증 불필요. `TagDetailResponse`로 `product`/`official`/`ownership` 중첩 구조를 반환한다(`authCode`는 노출 안 함). 프론트는 `ownership.registered`로 "이미 등록된 제품입니다" 안내와 "인증 코드 입력"을 분기한다. `ownership.registeredAt`은 **게스트 정밀도(`YYYY-MM`)**로만 내려간다.
+- `GET /api/tags/{tagCode}/ownership/me` — 오너 전용. `OwnerAuthInterceptor` 통과 필요. `OwnerHomeResponse`(`record`/`product`/`official`)를 반환하며 `record.registeredAt`은 **ISO 8601 + KST 오프셋**(`2026-03-14T09:22:00+09:00`)이다. 오너 홈이 게스트 뷰와 같은 정보 + 등록 카드이므로 `product`/`official`을 함께 내려 호출 1회로 끝낸다(05 소유권 화면은 이 응답을 재사용).
+- **정밀도 마스킹은 프론트가 아니라 서버가 한다**: `TagService.getTagInfo()`/`getOwnerHome()`이 각각 `KstTime.toGuestPrecision()`/`toIso()`로 `OwnershipRecord.registeredAt`을 포맷해서 응답에 담는다. 게스트 엔드포인트가 애초에 분단위 값을 응답에 넣지 않으므로, 프론트가 표시를 어떻게 하든(또는 API를 직접 호출하든) 오너가 아니면 분단위 시각을 알 수 없다 — "인가된 사람에게만 정밀 데이터를 내려준다"는 원칙을 응답 생성 시점에 강제.
+- **형식 검증**: tagCode는 `XXXX-XXXX` 정규식으로 먼저 검증하고 어긋나면 DB 조회 전에 `TAG_INVALID_FORMAT`(400)으로 끊는다. 열거 방지를 위해 `TAG_NOT_FOUND`와 메시지가 동일하다.
 
 ### 3-2. Ownership — 소유권 등록 (`domain/ownership`)
-- `POST /api/tags/{tagCode}/ownership` — body에 `authCode` 필수. 인증 헤더는 불필요(등록 이전 단계이므로)하지만, 서버가 DB에 저장된 `Tag.authCode`와 대조해 일치할 때만 등록을 진행한다 — "QR만 스캔하면 누구나 선점"하는 것을 막는 핵심 게이트.
-- 성공 시 `mcm:own:{tagCode}:{authCode}` 형태의 Bearer 토큰과 초기 크레딧 30을 발급. tagCode는 QR로 공개되지만 authCode는 등록 절차를 통과해야만 알 수 있으므로, 토큰은 등록하지 않은 사람이 임의로 계산할 수 없다.
-- **`OwnershipRecord`는 Tag와 1:1로, 관리자가 태그를 생성하는 시점에 항상 함께 만들어진다** (`AdminTagService.bulkCreate`) — 이전처럼 "레코드가 없을 수도 있는" null 케이스를 서비스 로직에서 다룰 필요가 없어졌다.
-- **5회 실패 잠금 정책**: `OwnershipRecord`가 IP 해시(SHA-256) 기준으로 실패 횟수를 추적한다. "이미 등록된 태그 재시도"와 "인증 코드 불일치"가 **같은 실패 카운트를 공유**하며(브루트포스 방지 목적이 동일하므로), 5회째에 `OWNERSHIP_LOCKED(403)`으로 전환된다. 등록에 성공하면 `failureCount`는 0으로 리셋됨(등록 전 실패 시도가 등록 후 잠금 임계치에 누적되지 않도록). `@Transactional(noRollbackFor = BusinessException.class)`로 실패 카운트 증가가 예외 발생 시에도 커밋되도록 보장한다.
+- `POST /api/tags/{tagCode}/ownership` — body에 `code`(인증 코드) 필수. 인증 헤더는 불필요(등록 이전 단계이므로)하지만, 서버가 DB에 저장된 `Tag.authCode`와 대조해 일치할 때만 등록을 진행한다 — "QR만 스캔하면 누구나 선점"하는 것을 막는 핵심 게이트. 입력은 대문자 정규화 + 하이픈 제거 후 비교하므로 `XXXX-XXXX-XXXX`/`XXXXXXXXXXXX` 둘 다 받는다.
+- 성공 시 `mcm:own:{tagCode}:{authCode}` 형태의 Bearer 토큰과 소유 레코드(`record.registeredAt`, ISO 8601)를 반환하고 초기 크레딧 30을 발급한다. tagCode는 QR로 공개되지만 authCode는 등록 절차를 통과해야만 알 수 있으므로, 토큰은 등록하지 않은 사람이 임의로 계산할 수 없다.
+- **`OwnershipRecord`는 Tag와 1:1로, 관리자가 태그를 생성하는 시점에 항상 함께 만들어진다** (`AdminTagService.bulkCreate`) — 이전처럼 "레코드가 없을 수도 있는" null 케이스를 서비스 로직에서 다룰 필요가 없어졌다. 소유 레코드는 등록 IP 해시와 등록 시각만 담당한다.
+- **5회 실패 잠금 정책**: 실패 횟수와 잠금은 `OwnershipRecord`가 아니라 별도 엔티티 `OwnershipAttempt`가 **`(tagCode, ip_hash)` 조합**으로 추적한다. tagCode 단독으로 잠그면 제3자가 남의 태그에 아무 코드나 5번 쳐서 잠글 수 있기 때문(기획 명세 2-2가 직접 지적한 취약점). "이미 등록된 태그 재시도"와 "인증 코드 불일치"가 **같은 실패 카운트를 공유**하며(브루트포스 방지 목적이 동일하므로), 5회째에 `CODE_LOCKED(429)` + `lockedUntil`로 전환된다. 잠금은 **24시간 뒤 자동 해제**되고, 등록에 성공하면 카운트가 리셋된다. `@Transactional(noRollbackFor = BusinessException.class)`로 실패 카운트 증가가 예외 발생 시에도 커밋되도록 보장한다.
+- 실패 응답에는 프론트가 쓸 부가 정보가 실린다 — `CODE_MISMATCH`에 `remainingAttempts`, `CODE_LOCKED`에 `lockedUntil`. 프론트가 자체 카운터를 두면 시크릿 창으로 우회되므로 서버 값만 표시하게 한다.
+- 이미 사용된 코드는 `CODE_MISMATCH`와 동일하게 처리된다(사용 여부가 노출되면 코드 열거 단서가 되므로).
 - 등록 성공 시 `Tag.markRegistered()` 호출과 `ChatCredit` 초기화(중복 방지를 위해 `findByTagCode` 후 없을 때만 `init`)가 같은 트랜잭션에서 함께 처리된다.
 
 ### 3-3 / 3-4 / 3-5. Chat — AI 챗 SSE 스트리밍 (`domain/chat`)
@@ -73,14 +76,14 @@ Layer 3 (실행)       LlmWebClient.streamCompletion() → SseEmitter로 청크 
 - **크레딧 차감**: 스트림이 정상 완료(`onComplete`)되든 에러로 끝나든(`onError`) 양쪽 콜백에서 모두 `deductCredit()`을 호출해 "1턴당 1회 차감"을 보장한다. 차감 자체는 `@Transactional`이 붙은 원자적 UPDATE(`remaining = remaining - 1 WHERE remaining > 0`)로 처리된다.
 - **연결 끊김(Abort) 대응**: `emitter.onCompletion/onTimeout/onError`에서 모두 `subscription.dispose()`를 호출해, 클라이언트가 연결을 끊어도 서버가 붙잡고 있던 LLM WebClient 구독을 즉시 취소한다. 불필요한 LLM 비용 지출을 막기 위한 장치.
 - `LlmWebClient`는 현재 실제 LLM 호출 대신 더미 텍스트를 150ms 간격으로 스트리밍하는 자리표시자 구현이며, 코드 내 주석으로 실제 OpenAI `/chat/completions` 스트리밍 연동 예시가 남겨져 있다.
-- `GET /api/tags/{tagCode}/chat/history` — 오너 전용. 해당 태그의 전체 대화 내역(`ChatMessage`)을 시간순으로 반환.
+- `GET /api/tags/{tagCode}/chat/history` — 오너 전용. `{ messages: [{role, content, createdAt}], credits: { remaining, limit } }` 형태로 대화 내역과 크레딧 잔량을 함께 반환한다(프론트는 `remaining <= 2`일 때 안내 문구를 띄운다). 크레딧 회복 정책이 미확정이라 `credits.resetAt`은 현재 항상 생략된다. **대화 내역 저장 로직이 아직 연결되지 않아 `messages`는 항상 빈 배열이다.**
 
 ## 4. 인증
 
 ### 4-1. 오너 인증 (`OwnerAuthInterceptor`)
-- `WebMvcConfig`에 `HandlerInterceptor`로 등록되며, 오너 인증이 필요한 경로(`/api/tags/*/home`, `/api/tags/*/chat`, `/api/tags/*/chat/**`)에만 적용되고 소유권 등록(`/api/tags/*/ownership`)은 명시적으로 제외된다.
+- `WebMvcConfig`에 `HandlerInterceptor`로 등록되며, 오너 인증이 필요한 경로(`/api/tags/*/ownership/me`, `/api/tags/*/chat`, `/api/tags/*/chat/**`)에만 적용된다. 소유권 등록(`POST /api/tags/*/ownership`)은 이 패턴에 걸리지 않으므로 인증 없이 호출된다.
 - 검증 로직: `Authorization` 헤더가 `Bearer mcm:own:` 접두사로 시작하는지 확인 → 토큰을 `{tagCode}:{authCode}`로 파싱 → URL 경로의 tagCode와 일치하는지 확인 → **DB에서 해당 tagCode의 Tag를 조회해 `authCode` 일치 + `status == REGISTERED`까지 실제로 검증**.
-- 헤더 누락/형식 오류/authCode 불일치/미등록 상태 → `INVALID_TOKEN(401)`, tagCode 불일치 → `TOKEN_MISMATCH(401)`.
+- 헤더 누락/형식 오류/authCode 불일치/미등록 상태/다른 태그의 토큰 → 전부 `TOKEN_INVALID(401)`. 실패 원인을 구분해 노출하지 않는다(열거 방지, 기획 명세 1-2의 단일 코드 정책).
 - 이 인터셉터가 하네스 규칙의 "프론트 입력 무신뢰" 원칙을 API 게이트웨이 레벨에서 강제하는 지점이다.
 - **수정 이력**: 원래는 토큰 형식(`mcm:own:{tagCode}`)만 확인하고 DB 검증이 없어서, tagCode(QR로 공개됨)만 알면 `POST /ownership`을 호출하지 않고도 `/home`·`/chat`에 접근 가능한 구멍이 있었다. authCode를 토큰에 포함시키고 매 요청마다 DB 대조를 추가해 해결 — 등록 절차를 실제로 통과한 사람만 토큰을 계산할 수 있다.
 
@@ -91,9 +94,11 @@ Layer 3 (실행)       LlmWebClient.streamCompletion() → SseEmitter로 청크 
 
 ## 5. 에러 처리
 
-모든 에러는 `ErrorCode` enum(HTTP 상태 + 코드 문자열 + 메시지) → `BusinessException`으로 감싸 throw → `GlobalExceptionHandler`가 `{ code, message, traceId }` 형태의 `ErrorResponse`로 변환하는 단일 경로를 따른다. 도메인 코드에서 `ResponseEntity`를 직접 에러로 만들거나 새로운 예외 타입을 throw하는 대신, 이 경로만 사용하도록 통일되어 있다.
+모든 에러는 `ErrorCode` enum(HTTP 상태 + 코드 문자열 + 메시지) → `BusinessException`으로 감싸 throw → `GlobalExceptionHandler`가 `{ code, message, traceId }` 형태의 `ErrorResponse`로 변환하는 단일 경로를 따른다. 도메인 코드에서 `ResponseEntity`를 직접 에러로 만들거나 새로운 예외 타입을 throw하는 대신, 이 경로만 사용하도록 통일되어 있다. Bean Validation 실패(`MethodArgumentNotValidException`)도 같은 포맷으로 내려간다.
 
-에러 코드 네임스페이스: `AUTH_xxx`(인증/관리자키), `CREDIT_xxx`(크레딧), `OWN_xxx`(소유권), `TAG_xxx`(태그), `ADMIN_xxx`(관리자 요청), `SERVER_xxx`(내부 오류).
+**코드 문자열과 HTTP 상태는 기획 명세 "API > 1-2. 에러 응답 포맷" 표를 그대로 따른다** — 프론트가 이 값으로 화면을 분기하므로 임의로 바꾸지 말 것: `TAG_NOT_FOUND`(404) / `TAG_INVALID_FORMAT`(400) / `CODE_MISMATCH`(400) / `CODE_LOCKED`(429) / `ALREADY_REGISTERED`(409) / `TOKEN_INVALID`(401) / `CREDIT_EXHAUSTED`(429) / `INTERNAL_ERROR`(500). 관리자 도구 전용으로 `ADMIN_KEY_INVALID`(401) / `ADMIN_INVALID_ACTION`(400)이 추가로 있다.
+
+일부 에러에는 부가 필드가 실린다 — `CODE_MISMATCH` → `remainingAttempts`, `CODE_LOCKED` → `lockedUntil`, `CREDIT_EXHAUSTED` → `resetAt`(정책 미확정이라 현재는 생략됨). 해당 없으면 `@JsonInclude(NON_NULL)`로 키 자체가 빠진다.
 
 ## 5-1. 관리자 흐름 (`domain/admin`)
 
@@ -112,11 +117,11 @@ Layer 3 (실행)       LlmWebClient.streamCompletion() → SseEmitter로 청크 
 - `AdminTagService.bulkCreate`: tagCode(`XXXX-XXXX`, 영문+숫자 8자)와 authCode(`XXXX-XXXX-XXXX`, `0`/`O`/`1`/`I` 제외 12자)를 `SecureRandom`으로 생성하고 유니크 제약 위반 시 재시도. 생성 즉시 `OwnershipRecord`도 `UNREGISTERED` 상태로 함께 저장 — Tag만 있고 OwnershipRecord가 없는 상태가 존재하지 않도록 보장.
 - `QrCodeService`: ZXing으로 PNG를 즉석 생성. 인코딩 대상은 `app.qr.url-template`(기본값 `{tagCode}` 그대로) — 프론트엔드 도메인이 정해지면 `https://.../t/{tagCode}` 형태로 env var(`QR_URL_TEMPLATE`)만 바꾸면 된다.
 - `force-status` 4가지 액션:
-  - `UNLOCK`: `failureCount=0, locked=false`만 초기화. 등록 상태는 유지 (정상 오너가 재시도 횟수만 초과한 경우).
+  - `UNLOCK`: 해당 태그에 쌓인 `OwnershipAttempt`(시도 이력)를 전부 삭제. 등록 상태는 유지 (정상 오너가 재시도 횟수만 초과한 경우). 24시간이 지나면 어차피 자동 해제되므로 즉시 풀어줄 때만 쓴다.
   - `UNLOCK_RECOVERY`: 위에 더해 `ipHash`/`registeredAt`까지 초기화하고 `Tag.status`를 `UNREGISTERED`로 되돌림 — 완전히 처음부터 재등록 가능한 상태로 복구.
   - `REGISTERED`: 실제 등록 절차 없이 `status=REGISTERED` + `ChatCredit` 초기화만 수행 (없으면 생성). 데모 리허설에서 "이미 등록된 상태"를 즉시 재현할 때 사용.
   - `UNREGISTERED`: `status=UNREGISTERED`로 리셋하고 `ChatCredit`/`ChatMessage`까지 삭제 — 데모를 처음 상태로 완전히 되돌릴 때 사용.
-- `authCode`는 현재 스키마에만 존재하고 어떤 API도 값을 검증하지 않는다 — "구매 인증 2차 검증용으로 쓸지" 여부는 아직 결정되지 않은 상태 (TODO 참고).
+- `AdminTagService.bulkCreate`가 생성하는 authCode는 하이픈 없는 12자 연속 문자열이다. 서버가 입력의 하이픈을 제거하고 비교하므로 실물에는 `XXXX-XXXX-XXXX`로 인쇄해도 무방하다.
 
 ## 6. API 문서화 (Swagger)
 
@@ -147,9 +152,15 @@ Layer 3 (실행)       LlmWebClient.streamCompletion() → SseEmitter로 청크 
 
 ## 8. 미완성 / TODO
 
+기획 명세 대비 남은 갭의 전체 목록과 우선순위는 `SPEC_ALIGNMENT.md`의 B절을 참고. 요약하면:
+
+- **챗 메시지 저장 미연결** — `ChatMessage.of()`가 어디서도 호출되지 않아 `/chat/history`의 `messages`가 항상 빈 배열.
 - `LlmWebClient`: 더미 스트리밍 → 실제 OpenAI(or 다른 LLM) 스트리밍 API로 교체 필요 (연동 예시 코드는 주석으로 이미 준비됨).
+- **크레딧 자동 회복(롤링 리셋) 없음** — 회복 주기가 미확정이라 구현하지 않았다. 확정되면 `credits.resetAt`과 `CREDIT_EXHAUSTED`의 `resetAt`을 함께 채운다.
+- **IP 시간당 상한(`RATE_LIMITED`) 미구현**, **CORS 설정 없음**.
+- 소유권 카드 이미지(`card.png`), OG 태그 제어, 판매 미등록 상태(`TAG_NOT_RELEASED`) 미구현.
 - QR 인코딩 대상이 아직 tagCode 원문뿐 — 프론트엔드 도메인이 정해지면 `QR_URL_TEMPLATE` env var만 바꾸면 됨(코드 변경 불필요).
-- authCode는 12자리 랜덤 문자열을 그대로 평문 저장/비교한다. 실사용 단계에서는 무차별 대입에 대비해 rate limit을 IP뿐 아니라 tagCode 단위로도 걸거나, authCode 자체 엔트로피를 늘리는 걸 고려할 수 있음(현재는 5회 실패 잠금으로 1차 방어만 되어 있음).
+- authCode는 12자리 랜덤 문자열을 그대로 평문 저장/비교한다. 5회 실패 잠금이 `(tagCode, ip_hash)` 단위로 1차 방어를 하지만, 실사용 단계에서는 전역 rate limit이나 authCode 엔트로피 상향을 고려할 수 있다.
 
 ### 완료됨
 - ~~`com.example.luxury` 기본 애플리케이션 클래스 정리~~ — 삭제 완료. 해당 패키지의 `LuxuryApplicationTests`가 `@SpringBootConfiguration`을 찾지 못해 `./gradlew test`가 실패하던 상태였음. 삭제 후 `com.mcm.onboarding.McmOnboardingApplicationTests`로 컨텍스트 로딩 스모크 테스트를 대체 추가. 이때 `.idea/workspace.xml`에 남아있던 `LuxuryApplication` Run Configuration도 함께 정리.
