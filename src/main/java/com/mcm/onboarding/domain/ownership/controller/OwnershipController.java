@@ -25,33 +25,37 @@ public class OwnershipController {
     private final OwnershipService ownershipService;
 
     @Operation(
-        summary = "소유권 등록 (3-2)",
+        summary = "소유권 등록 (03)",
         description = """
-            QR 코드로 스캔한 제품에 대한 소유권을 등록합니다. 실물에 인쇄된 인증 코드(authCode)를
-            함께 제출해야 하며, 서버가 DB에 저장된 값과 대조해 일치할 때만 등록됩니다. 인증 불필요(사전 토큰 없이 호출).
+            실물에 인쇄된 인증 코드를 검증해 소유 레코드를 생성하고 오너 토큰을 발급합니다. 인증 불필요.
 
-            **성공 시**: Bearer 토큰(`mcm:own:{tagCode}:{authCode}`)과 초기 크레딧(30) 발급
+            **잠금 정책**: 실패 누적과 잠금 판정은 서버가 `tagCode + ip_hash` 조합으로 관리합니다.
+            5회 실패 시 24시간 잠금되며, 잠금 시각이 지나면 자동 해제됩니다.
 
-            **잠금 정책**: 이미 등록된 태그 재등록 시도 또는 인증 코드 불일치가 합산되어 5회 실패 시 잠금 (OWN_001)
+            **응답에 실리는 부가 정보**
+            - `CODE_MISMATCH` → `remainingAttempts` (프론트는 자체 카운터를 두지 말고 이 값만 표시)
+            - `CODE_LOCKED` → `lockedUntil` (프론트가 "N시간 M분 후 다시 시도" 계산)
+
+            이미 사용된 코드는 `CODE_MISMATCH`와 동일하게 처리됩니다 (사용 여부 노출 시 코드 열거 단서가 되므로).
             """
     )
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "소유권 등록 성공 — 토큰 및 크레딧 발급"),
-        @ApiResponse(responseCode = "401", description = "인증 코드 불일치 (OWN_003)",
+        @ApiResponse(responseCode = "200", description = "소유권 등록 성공 — 토큰 및 소유 레코드 반환"),
+        @ApiResponse(responseCode = "400", description = "인증 코드 불일치 (CODE_MISMATCH) / 태그 코드 형식 오류 (TAG_INVALID_FORMAT)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "403", description = "5회 초과 잠금 (OWN_001)",
+        @ApiResponse(responseCode = "404", description = "존재하지 않는 태그 (TAG_NOT_FOUND)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "404", description = "존재하지 않는 태그 (TAG_001)",
+        @ApiResponse(responseCode = "409", description = "이미 소유권 등록된 태그 (ALREADY_REGISTERED)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "409", description = "이미 소유권 등록된 태그 (OWN_002)",
+        @ApiResponse(responseCode = "429", description = "시도 초과 잠금 (CODE_LOCKED)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PostMapping
     public ResponseEntity<OwnershipResponse> registerOwnership(
-        @Parameter(description = "QR 코드 값", example = "AB3D-9F2K") @PathVariable String tagCode,
+        @Parameter(description = "QR 코드 값", example = "A1B2-C3D4") @PathVariable String tagCode,
         @Valid @RequestBody OwnershipRequest request,
         @Parameter(hidden = true) @RequestHeader(value = "X-Forwarded-For", defaultValue = "unknown") String clientIp
     ) {
-        return ResponseEntity.ok(ownershipService.register(tagCode, request.authCode(), clientIp));
+        return ResponseEntity.ok(ownershipService.register(tagCode, request.code(), clientIp));
     }
 }

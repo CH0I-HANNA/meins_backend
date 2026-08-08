@@ -12,6 +12,9 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 public class ChatCredit {
 
+    // 1턴 = 1크레딧. 프론트는 remaining이 2 이하일 때 안내 문구를 띄운다.
+    public static final int DEFAULT_LIMIT = 30;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -20,15 +23,15 @@ public class ChatCredit {
     private String tagCode;
 
     @Column(nullable = false)
-    private int remaining = 30;
+    private int remaining = DEFAULT_LIMIT;
 
     private LocalDateTime updatedAt;
 
-    public static ChatCredit init(String tagCode) {
+    public static ChatCredit init(String tagCode, LocalDateTime now) {
         ChatCredit credit = new ChatCredit();
         credit.tagCode = tagCode;
-        credit.remaining = 30;
-        credit.updatedAt = LocalDateTime.now();
+        credit.remaining = DEFAULT_LIMIT;
+        credit.updatedAt = now;
         return credit;
     }
 }

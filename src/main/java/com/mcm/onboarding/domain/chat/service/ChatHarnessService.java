@@ -4,8 +4,11 @@ import com.mcm.onboarding.common.exception.BusinessException;
 import com.mcm.onboarding.common.exception.ErrorCode;
 import com.mcm.onboarding.common.util.CodeNormalizer;
 import com.mcm.onboarding.domain.chat.client.LlmWebClient;
+import com.mcm.onboarding.domain.chat.dto.ChatHistoryResponse;
 import com.mcm.onboarding.domain.chat.dto.ChatRequest;
+import com.mcm.onboarding.domain.chat.entity.ChatCredit;
 import com.mcm.onboarding.domain.chat.entity.ChatMessage;
+import com.mcm.onboarding.domain.chat.repository.ChatCreditRepository;
 import com.mcm.onboarding.domain.chat.repository.ChatMessageRepository;
 import com.mcm.onboarding.domain.tag.entity.Tag;
 import com.mcm.onboarding.domain.tag.repository.TagRepository;
@@ -25,6 +28,7 @@ public class ChatHarnessService {
     private final LlmWebClient llmWebClient;
     private final TagRepository tagRepository;
     private final ChatMessageRepository chatMessageRepository;
+    private final ChatCreditRepository chatCreditRepository;
 
     private static final String GUARDRAIL_PROMPT = """
         [가드레일 규칙 — 절대 위반 금지]
@@ -73,8 +77,12 @@ public class ChatHarnessService {
         return emitter;
     }
 
-    public List<ChatMessage> getChatHistory(String rawTagCode) {
-        return chatMessageRepository.findByTagCodeOrderByCreatedAtAsc(CodeNormalizer.normalize(rawTagCode));
+    public ChatHistoryResponse getChatHistory(String rawTagCode) {
+        String tagCode = CodeNormalizer.normalize(rawTagCode);
+        List<ChatMessage> messages = chatMessageRepository.findByTagCodeOrderByCreatedAtAsc(tagCode);
+        int remaining = chatCreditRepository.findRemainingByTagCode(tagCode)
+            .orElseThrow(() -> new BusinessException(ErrorCode.TAG_NOT_FOUND));
+        return ChatHistoryResponse.of(messages, remaining, ChatCredit.DEFAULT_LIMIT);
     }
 
     private String buildSystemPrompt(String tagCode, String preset) {

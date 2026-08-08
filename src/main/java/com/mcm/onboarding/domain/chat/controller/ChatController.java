@@ -1,8 +1,8 @@
 package com.mcm.onboarding.domain.chat.controller;
 
 import com.mcm.onboarding.common.dto.ErrorResponse;
+import com.mcm.onboarding.domain.chat.dto.ChatHistoryResponse;
 import com.mcm.onboarding.domain.chat.dto.ChatRequest;
-import com.mcm.onboarding.domain.chat.entity.ChatMessage;
 import com.mcm.onboarding.domain.chat.service.ChatHarnessService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -18,8 +18,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.util.List;
-
 @Tag(name = "Chat", description = "AI 챗 스트리밍 및 대화 히스토리")
 @RestController
 @RequestMapping("/api/tags/{tagCode}/chat")
@@ -29,7 +27,7 @@ public class ChatController {
     private final ChatHarnessService chatHarnessService;
 
     @Operation(
-        summary = "AI 챗 SSE 스트리밍 (3-5)",
+        summary = "AI 챗 SSE 스트리밍 (06)",
         description = """
             AI 챗봇과 실시간 스트리밍 대화를 시작합니다. Bearer 토큰 필수.
 
@@ -50,32 +48,37 @@ public class ChatController {
     )
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "SSE 스트림 시작 (text/event-stream)"),
-        @ApiResponse(responseCode = "401", description = "토큰 없음 또는 tagCode 불일치 (AUTH_001 / AUTH_002)",
+        @ApiResponse(responseCode = "401", description = "토큰 무효·만료 또는 다른 태그의 토큰 (TOKEN_INVALID)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
-        @ApiResponse(responseCode = "429", description = "크레딧 소진 (CREDIT_001)",
+        @ApiResponse(responseCode = "429", description = "크레딧 소진 (CREDIT_EXHAUSTED)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamChat(
-        @Parameter(description = "QR 코드 값", example = "AB3D-9F2K") @PathVariable String tagCode,
+        @Parameter(description = "QR 코드 값", example = "A1B2-C3D4") @PathVariable String tagCode,
         @RequestBody ChatRequest request
     ) {
         return chatHarnessService.streamChat(tagCode, request);
     }
 
     @Operation(
-        summary = "챗 히스토리 조회 (3-4)",
-        description = "해당 태그의 전체 대화 내역을 시간순으로 반환합니다. Bearer 토큰 필수.",
+        summary = "챗 히스토리 조회 (06 진입)",
+        description = """
+            해당 태그의 전체 대화 내역을 시간순으로 반환합니다. Bearer 토큰 필수.
+
+            이력은 서버에 저장되며 `(tagCode, ownerToken)` 기준으로 묶입니다 — 기기를 바꿔도 복원됩니다.
+            `credits.remaining`이 2 이하일 때 프론트가 안내 문구를 띄웁니다.
+            """,
         security = @SecurityRequirement(name = "OwnerToken")
     )
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "히스토리 조회 성공"),
-        @ApiResponse(responseCode = "401", description = "토큰 없음 또는 tagCode 불일치 (AUTH_001 / AUTH_002)",
+        @ApiResponse(responseCode = "401", description = "토큰 무효·만료 또는 다른 태그의 토큰 (TOKEN_INVALID)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @GetMapping("/history")
-    public ResponseEntity<List<ChatMessage>> getChatHistory(
-        @Parameter(description = "QR 코드 값", example = "AB3D-9F2K") @PathVariable String tagCode
+    public ResponseEntity<ChatHistoryResponse> getChatHistory(
+        @Parameter(description = "QR 코드 값", example = "A1B2-C3D4") @PathVariable String tagCode
     ) {
         return ResponseEntity.ok(chatHarnessService.getChatHistory(tagCode));
     }

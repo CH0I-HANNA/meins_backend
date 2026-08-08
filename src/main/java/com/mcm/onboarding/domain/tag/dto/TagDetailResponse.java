@@ -1,51 +1,36 @@
 package com.mcm.onboarding.domain.tag.dto;
 
-import com.mcm.onboarding.domain.product.entity.Product;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.mcm.onboarding.common.util.KstTime;
 import com.mcm.onboarding.domain.tag.entity.Tag;
-import com.mcm.onboarding.domain.tag.entity.TagStatus;
 import io.swagger.v3.oas.annotations.media.Schema;
 
-import java.util.List;
+import java.time.LocalDateTime;
 
-@Schema(description = "태그 + 제품 상세 정보")
+// 기획 명세 2-1: GET /api/tags/{tagCode} 응답 (게스트, 인증 불필요).
+// 구매처(purchasedFrom)는 8/2 회의에서 제외 결정 — 오너 응답에도 포함하지 않는다.
+@Schema(description = "태그 조회 응답 (게스트)")
 public record TagDetailResponse(
-    @Schema(description = "QR 코드 값", example = "AB3D-9F2K") String tagCode,
-    @Schema(description = "제품명", example = "MCM 클래식 백팩") String productName,
-    @Schema(description = "모델코드", example = "MMK6AVE20BK") String modelCode,
-    @Schema(description = "제조연월", example = "2026-08") String manufacturedYm,
-    @Schema(description = "소재", example = "비세토스 캔버스") String material,
-    @Schema(description = "색상", example = "브라운") String color,
-    @Schema(description = "판매 등록 연월", example = "2026-09") String saleRegisteredYm,
-    @Schema(description = "가로 (cm)", example = "30") Integer widthCm,
-    @Schema(description = "세로 (cm)", example = "15") Integer depthCm,
-    @Schema(description = "높이 (cm)", example = "20") Integer heightCm,
-    @Schema(description = "대표 이미지 URL") String imageUrl,
-    @Schema(description = "하단 썸네일 이미지 URL 목록 (최대 3개)") List<String> thumbnailImageUrls,
-    @Schema(description = "브랜드 공식 제품 페이지 URL") String productPageUrl,
-    @Schema(description = "등록 상태", example = "REGISTERED") TagStatus status,
-    @Schema(description = "소유 등록 시점 — 게스트 조회는 YYYY-MM, 오너 조회는 YYYY-MM-DD HH:mm 정밀도",
-        example = "2026-08-06 20:00", nullable = true) String registeredAt
+    @Schema(description = "QR 코드 값", example = "A1B2-C3D4") String tagCode,
+    @Schema(description = "제품 정보") ProductInfo product,
+    @Schema(description = "공식 출처 정보") OfficialInfo official,
+    @Schema(description = "소유 등록 정보") OwnershipInfo ownership
 ) {
-    public static TagDetailResponse of(Tag tag, String registeredAt) {
-        Product product = tag.getProduct();
-        List<String> thumbnails = List.of(product.getThumbnailImageUrl1(), product.getThumbnailImageUrl2(),
-                product.getThumbnailImageUrl3()).stream().filter(java.util.Objects::nonNull).toList();
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    @Schema(description = "소유 등록 정보 (게스트 정밀도)")
+    public record OwnershipInfo(
+        @Schema(description = "소유자 등록 여부", example = "true") boolean registered,
+        @Schema(description = "소유 등록 시점 (YYYY-MM) — 미등록이면 null", example = "2026-03", nullable = true)
+        String registeredAt
+    ) {}
+
+    public static TagDetailResponse of(Tag tag, LocalDateTime registeredAt) {
         return new TagDetailResponse(
             tag.getTagCode(),
-            product.getProductName(),
-            product.getModelCode(),
-            product.getManufacturedYm(),
-            product.getMaterial(),
-            product.getColor(),
-            product.getSaleRegisteredYm(),
-            product.getWidthCm(),
-            product.getDepthCm(),
-            product.getHeightCm(),
-            product.getImageUrl(),
-            thumbnails,
-            product.getProductPageUrl(),
-            tag.getStatus(),
-            registeredAt
+            ProductInfo.from(tag.getProduct()),
+            OfficialInfo.from(tag.getProduct()),
+            // 게스트에게는 YYYY-MM까지만. 서버가 잘라서 내리므로 API를 직접 호출해도 분 단위는 알 수 없다.
+            new OwnershipInfo(tag.isRegistered(), KstTime.toGuestPrecision(registeredAt))
         );
     }
 }

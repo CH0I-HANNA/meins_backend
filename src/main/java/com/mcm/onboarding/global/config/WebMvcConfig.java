@@ -17,15 +17,12 @@ public class WebMvcConfig implements WebMvcConfigurer {
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(ownerAuthInterceptor)
-            // 오너 인증이 필요한 엔드포인트만 적용
+            // 오너 인증이 필요한 엔드포인트만 적용.
+            // 소유권 등록(POST /api/tags/*/ownership)은 인증 전 단계라 여기 포함되지 않는다.
             .addPathPatterns(
-                "/api/tags/*/home",
+                "/api/tags/*/ownership/me",
                 "/api/tags/*/chat",
                 "/api/tags/*/chat/**"
-            )
-            // 소유권 등록은 인증 전 단계이므로 제외
-            .excludePathPatterns(
-                "/api/tags/*/ownership"
             );
 
         registry.addInterceptor(adminAuthInterceptor)
