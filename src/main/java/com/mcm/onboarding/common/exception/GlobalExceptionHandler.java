@@ -2,6 +2,7 @@ package com.mcm.onboarding.common.exception;
 
 import com.mcm.onboarding.common.dto.ErrorResponse;
 import com.mcm.onboarding.common.util.KstTime;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -29,6 +30,15 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidationException(MethodArgumentNotValidException e) {
         ErrorCode ec = ErrorCode.VALIDATION_FAILED;
+        return ResponseEntity.status(ec.getHttpStatus())
+            .body(ErrorResponse.of(ec.getCode(), ec.getMessage(), null, null, null));
+    }
+
+    // 더블클릭/재시도로 같은 요청이 동시에 들어와 DB unique 제약(예: 소유권 시도 이력)에 걸린
+    // 경우. 서버 결함이 아니라 재시도로 해결되는 상황이므로 500 대신 409로 명확히 구분한다.
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(DataIntegrityViolationException e) {
+        ErrorCode ec = ErrorCode.REQUEST_CONFLICT;
         return ResponseEntity.status(ec.getHttpStatus())
             .body(ErrorResponse.of(ec.getCode(), ec.getMessage(), null, null, null));
     }
