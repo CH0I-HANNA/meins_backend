@@ -42,8 +42,9 @@ public class ChatHarnessService {
     public SseEmitter streamChat(String rawTagCode, ChatRequest request) {
         String tagCode = CodeNormalizer.normalize(rawTagCode);
 
-        // ── Layer 1: 가드레일 — 크레딧 체크 (LLM 미호출 조건 먼저 확인) ──
+        // ── Layer 1: 가드레일 — 크레딧 체크 + 원자적 선차감 (LLM 미호출 조건 먼저 확인) ──
         creditGuardService.checkCredit(tagCode);
+        creditGuardService.reserveCredit(tagCode);
 
         // ── Layer 2: 컨텍스트 조립 — DB 직접 조회, 프론트 신뢰 금지 ──
         String systemPrompt = buildSystemPrompt(tagCode, request.preset());
@@ -68,12 +69,8 @@ public class ChatHarnessService {
                         emitter.completeWithError(e);
                     }
                 },
-                error -> {
-                    creditGuardService.deductCredit(tagCode); // 에러 시에도 차감
-                    emitter.completeWithError(error);
-                },
+                error -> emitter.completeWithError(error), // 차감은 reserveCredit()에서 이미 완료됨
                 () -> {
-                    creditGuardService.deductCredit(tagCode); // 정상 종료 시 차감
                     chatMessageRepository.save(
                         ChatMessage.of(tagCode, "assistant", assistantContent.toString(), request.preset(), KstTime.now())
                     );
