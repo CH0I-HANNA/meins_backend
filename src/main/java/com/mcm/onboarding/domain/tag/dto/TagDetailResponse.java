@@ -1,6 +1,5 @@
 package com.mcm.onboarding.domain.tag.dto;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
 import com.mcm.onboarding.common.util.KstTime;
 import com.mcm.onboarding.domain.tag.entity.Tag;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -16,7 +15,8 @@ public record TagDetailResponse(
     @Schema(description = "공식 출처 정보") OfficialInfo official,
     @Schema(description = "소유 등록 정보") OwnershipInfo ownership
 ) {
-    @JsonInclude(JsonInclude.Include.NON_NULL)
+    // material/size/color/productUrl(ProductInfo)과 달리, registeredAt은 명세가 "미등록이면 null"로
+    // 명시했다 — 값이 없다고 키를 지우는 다른 필드들과 달리 여기선 @JsonInclude(NON_NULL)을 걸면 안 된다.
     @Schema(description = "소유 등록 정보 (게스트 정밀도)")
     public record OwnershipInfo(
         @Schema(description = "소유자 등록 여부", example = "true") boolean registered,
