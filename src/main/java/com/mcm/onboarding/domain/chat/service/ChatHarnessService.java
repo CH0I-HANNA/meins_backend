@@ -47,12 +47,20 @@ public class ChatHarnessService {
         // ── Layer 2: 컨텍스트 조립 — DB 직접 조회, 프론트 신뢰 금지 ──
         String systemPrompt = buildSystemPrompt(tagCode, request.preset());
 
+        // 사용자 발화는 LLM 호출을 실제로 시도하는 시점에 남긴다.
+        // free-text가 없으면(preset만 전송) 칩 라벨을 그대로 기록해 히스토리에서 빈 말풍선이 없게 한다.
+        chatMessageRepository.save(
+            ChatMessage.of(tagCode, "user", resolveUserContent(request), request.preset())
+        );
+
         SseEmitter emitter = new SseEmitter(60_000L);
+        StringBuilder assistantContent = new StringBuilder();
 
         // ── Layer 3: LLM 스트리밍 실행 ──
         Disposable subscription = llmWebClient.streamCompletion(systemPrompt, request.message())
             .subscribe(
                 chunk -> {
+                    assistantContent.append(chunk);
                     try {
                         emitter.send(SseEmitter.event().data(chunk));
                     } catch (IOException e) {
@@ -65,6 +73,9 @@ public class ChatHarnessService {
                 },
                 () -> {
                     creditGuardService.deductCredit(tagCode); // 정상 종료 시 차감
+                    chatMessageRepository.save(
+                        ChatMessage.of(tagCode, "assistant", assistantContent.toString(), request.preset())
+                    );
                     emitter.complete();
                 }
             );
@@ -83,6 +94,20 @@ public class ChatHarnessService {
         int remaining = chatCreditRepository.findRemainingByTagCode(tagCode)
             .orElseThrow(() -> new BusinessException(ErrorCode.TAG_NOT_FOUND));
         return ChatHistoryResponse.of(messages, remaining, ChatCredit.DEFAULT_LIMIT);
+    }
+
+    // message가 없는 프리셋 전용 요청(칩 클릭)의 user 메시지 content — ChatMessage.content는 NOT NULL이라
+    // 무언가는 채워야 하고, 06 화면의 칩 라벨과 맞춰 히스토리에 그대로 노출한다.
+    private String resolveUserContent(ChatRequest request) {
+        if (request.message() != null && !request.message().isBlank()) {
+            return request.message();
+        }
+        return switch (request.preset() != null ? request.preset() : "") {
+            case "care"     -> "케어";
+            case "style"    -> "스타일";
+            case "heritage" -> "헤리티지";
+            default         -> "(빈 메시지)";
+        };
     }
 
     private String buildSystemPrompt(String tagCode, String preset) {
