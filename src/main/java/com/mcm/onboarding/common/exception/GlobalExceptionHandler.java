@@ -4,6 +4,7 @@ import com.mcm.onboarding.common.dto.ErrorResponse;
 import com.mcm.onboarding.common.util.KstTime;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -29,6 +30,16 @@ public class GlobalExceptionHandler {
     // 소유권 등록 전용 의미인 CODE_MISMATCH로 매핑하면 안 된다 — 일반 검증 실패 코드를 쓴다.
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidationException(MethodArgumentNotValidException e) {
+        ErrorCode ec = ErrorCode.VALIDATION_FAILED;
+        return ResponseEntity.status(ec.getHttpStatus())
+            .body(ErrorResponse.of(ec.getCode(), ec.getMessage(), null, null, null));
+    }
+
+    // 잘못되거나 깨진 JSON 바디는 클라이언트 잘못이므로 400으로 응답한다. 컨트롤러 진입 전
+    // 메시지 컨버터 단계에서 던져지므로 BusinessException/MethodArgumentNotValidException
+    // 어느 쪽도 아니며, 이 핸들러가 없으면 catch-all에 빠져 500으로 나간다.
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleMessageNotReadable(HttpMessageNotReadableException e) {
         ErrorCode ec = ErrorCode.VALIDATION_FAILED;
         return ResponseEntity.status(ec.getHttpStatus())
             .body(ErrorResponse.of(ec.getCode(), ec.getMessage(), null, null, null));
