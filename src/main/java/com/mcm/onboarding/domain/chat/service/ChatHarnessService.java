@@ -20,6 +20,7 @@ import reactor.core.Disposable;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
 @RequiredArgsConstructor
@@ -56,6 +57,10 @@ public class ChatHarnessService {
 
         SseEmitter emitter = new SseEmitter(60_000L);
         StringBuilder assistantContent = new StringBuilder();
+        // 명세 2-5 요청사항 3: 차감은 "스트림 종료 시(중단 포함)"에만 하고 "호출 실패 시엔 미차감".
+        // 중단 시 이후 청크들이 연달아 emitter.send() 실패로 catch에 걸릴 수 있어, 1턴에 1번만
+        // 차감되도록 가드가 필요하다.
+        AtomicBoolean creditSettled = new AtomicBoolean(false);
 
         // ── Layer 3: LLM 스트리밍 실행 ──
         Disposable subscription = llmWebClient.streamCompletion(systemPrompt, request.message())
@@ -65,15 +70,22 @@ public class ChatHarnessService {
                     try {
                         emitter.send(SseEmitter.event().data(chunk));
                     } catch (IOException e) {
+                        // 클라이언트 중단 — 명세상 중단이어도 1턴 차감 대상
+                        if (creditSettled.compareAndSet(false, true)) {
+                            creditGuardService.deductCredit(tagCode);
+                        }
                         emitter.completeWithError(e);
                     }
                 },
                 error -> {
-                    creditGuardService.deductCredit(tagCode); // 에러 시에도 차감
+                    // 호출 실패(LLM 자체 에러) — 명세상 미차감. 완료/중단과 달리 크레딧을 건드리지 않는다.
                     emitter.completeWithError(error);
                 },
                 () -> {
-                    creditGuardService.deductCredit(tagCode); // 정상 종료 시 차감
+                    // 정상 종료 — 차감 + 저장
+                    if (creditSettled.compareAndSet(false, true)) {
+                        creditGuardService.deductCredit(tagCode);
+                    }
                     chatMessageRepository.save(
                         ChatMessage.of(tagCode, "assistant", assistantContent.toString(), request.preset(), KstTime.now())
                     );
