@@ -73,7 +73,7 @@ Layer 3 (실행)       LlmWebClient.streamCompletion() → SseEmitter로 청크 
 
 - **가드레일 프롬프트**는 `GUARDRAIL_PROMPT` 상수로 고정되어 매 요청마다 시스템 프롬프트 최상단에 강제 주입된다 (가품 판정 금지 / 가격 산정 금지 / 리셀 시세 언급 금지).
 - **프리셋**: `care`(관리법) / `style`(스타일링) / `heritage`(브랜드 헤리티지) 중 하나를 요청 시 지정하면 해당 문맥이 시스템 프롬프트에 추가된다. 없으면 "일반 문의"로 처리.
-- **크레딧 차감**: 스트림이 정상 완료(`onComplete`)되든 에러로 끝나든(`onError`) 양쪽 콜백에서 모두 `deductCredit()`을 호출해 "1턴당 1회 차감"을 보장한다. 차감 자체는 `@Transactional`이 붙은 원자적 UPDATE(`remaining = remaining - 1 WHERE remaining > 0`)로 처리된다.
+- **크레딧 차감**: LLM 호출 직전에 `reserveCredit()`으로 1턴을 선차감한다(`@Transactional` + 원자적 UPDATE `remaining = remaining - 1 WHERE remaining > 0`, 영향 row 수로 소진 판정 — 조회와 차감 사이 레이스를 여기서 닫는다). 명세상 "호출 실패 시 미차감"이므로 LLM 스트림이 에러로 끝나는 `onError` 경로에서만 `refundCredit()`으로 되돌린다. 정상 완료와 클라이언트 중단(abort)은 명세상 모두 차감 대상이라 되돌리지 않는다.
 - **연결 끊김(Abort) 대응**: `emitter.onCompletion/onTimeout/onError`에서 모두 `subscription.dispose()`를 호출해, 클라이언트가 연결을 끊어도 서버가 붙잡고 있던 LLM WebClient 구독을 즉시 취소한다. 불필요한 LLM 비용 지출을 막기 위한 장치.
 - `LlmWebClient`는 현재 실제 LLM 호출 대신 더미 텍스트를 150ms 간격으로 스트리밍하는 자리표시자 구현이며, 코드 내 주석으로 실제 OpenAI `/chat/completions` 스트리밍 연동 예시가 남겨져 있다.
 - `GET /api/tags/{tagCode}/chat/history` — 오너 전용. `{ messages: [{role, content, createdAt}], credits: { remaining, limit } }` 형태로 대화 내역과 크레딧 잔량을 함께 반환한다(프론트는 `remaining <= 2`일 때 안내 문구를 띄운다). 크레딧 회복 정책이 미확정이라 `credits.resetAt`은 현재 항상 생략된다. `messages`는 `tagCode` 기준으로 서버에 저장된 실제 대화 내역이다(재진입 시 복원됨).
