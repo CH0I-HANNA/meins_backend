@@ -19,5 +19,11 @@ public interface ChatCreditRepository extends JpaRepository<ChatCredit, Long> {
     @Query("UPDATE ChatCredit c SET c.remaining = c.remaining - 1 WHERE c.tagCode = :tagCode AND c.remaining > 0")
     int decrementCredit(@Param("tagCode") String tagCode);
 
+    // 선차감한 크레딧을 되돌린다. remaining < :limit 조건은 되돌리기가 중복 실행돼도
+    // 지급 한도를 넘겨 크레딧이 불어나지 않게 하는 안전장치다.
+    @Modifying
+    @Query("UPDATE ChatCredit c SET c.remaining = c.remaining + 1 WHERE c.tagCode = :tagCode AND c.remaining < :limit")
+    int incrementCredit(@Param("tagCode") String tagCode, @Param("limit") int limit);
+
     void deleteByTagCode(String tagCode);
 }

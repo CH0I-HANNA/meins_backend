@@ -88,7 +88,12 @@ public class ChatHarnessService {
                         }
                     }
                 },
-                error -> emitter.completeWithError(error), // 차감은 reserveCredit()에서 이미 완료됨
+                error -> {
+                    // 명세 2-5 요청사항 3: "호출 실패 시 미차감". 레이스를 닫으려고 선차감해 둔 1턴을
+                    // LLM 호출이 실패한 이 경로에서만 되돌린다. 정상 종료/클라이언트 중단은 차감 유지.
+                    creditGuardService.refundCredit(tagCode);
+                    emitter.completeWithError(error);
+                },
                 () -> {
                     chatMessageRepository.save(
                         ChatMessage.of(tagCode, "assistant", assistantContent.toString(), request.preset(), KstTime.now())

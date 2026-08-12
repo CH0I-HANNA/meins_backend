@@ -2,6 +2,7 @@ package com.mcm.onboarding.domain.chat.service;
 
 import com.mcm.onboarding.common.exception.BusinessException;
 import com.mcm.onboarding.common.exception.ErrorCode;
+import com.mcm.onboarding.domain.chat.entity.ChatCredit;
 import com.mcm.onboarding.domain.chat.repository.ChatCreditRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -35,5 +36,14 @@ public class CreditGuardService {
         if (updated == 0) {
             throw BusinessException.creditExhausted(null);
         }
+    }
+
+    // 명세 2-5 요청사항 3: "차감은 스트림 종료 시(중단 포함), 호출 실패 시 미차감".
+    // 레이스를 닫으려면 차감은 LLM 호출 전에 해야 하는데(reserveCredit), 그러면 호출이
+    // 실패했을 때도 이미 차감된 상태가 된다. 그래서 실패 경로에서만 되돌려 두 요구를 모두 만족시킨다.
+    // 클라이언트 중단은 명세상 차감 대상이므로 여기로 오지 않는다.
+    @Transactional
+    public void refundCredit(String tagCode) {
+        chatCreditRepository.incrementCredit(tagCode, ChatCredit.DEFAULT_LIMIT);
     }
 }
