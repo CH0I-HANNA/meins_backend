@@ -71,7 +71,9 @@ public class ChatHarnessService {
         AtomicReference<Disposable> subscriptionRef = new AtomicReference<>();
 
         // ── Layer 3: LLM 스트리밍 실행 ──
-        Disposable subscription = llmWebClient.streamCompletion(systemPrompt, request.message())
+        // preset 전용 요청(칩 클릭)은 message가 null이다 — 그대로 넘기면 요청 바디 조립 시점에
+        // NPE가 나므로, 히스토리에 남긴 것과 같은 값(칩 라벨)을 LLM에도 보낸다.
+        Disposable subscription = llmWebClient.streamCompletion(systemPrompt, resolveUserContent(request))
             .subscribe(
                 chunk -> {
                     assistantContent.append(chunk);
