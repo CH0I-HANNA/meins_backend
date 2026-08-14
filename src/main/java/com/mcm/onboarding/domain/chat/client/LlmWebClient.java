@@ -1,7 +1,5 @@
 package com.mcm.onboarding.domain.chat.client;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
@@ -9,6 +7,8 @@ import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.Map;
@@ -55,7 +55,7 @@ public class LlmWebClient {
         try {
             JsonNode content = objectMapper.readTree(chunkJson)
                 .path("choices").path(0).path("delta").path("content");
-            return content.isMissingNode() ? "" : content.asText("");
+            return content.isMissingNode() ? "" : content.asString("");
         } catch (Exception e) {
             return "";
         }
