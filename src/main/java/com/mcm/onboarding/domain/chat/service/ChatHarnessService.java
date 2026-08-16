@@ -116,9 +116,9 @@ public class ChatHarnessService {
     public ChatHistoryResponse getChatHistory(String rawTagCode) {
         String tagCode = CodeNormalizer.normalize(rawTagCode);
         List<ChatMessage> messages = chatMessageRepository.findByTagCodeOrderByCreatedAtAsc(tagCode);
-        int remaining = chatCreditRepository.findRemainingByTagCode(tagCode)
+        ChatCredit credit = chatCreditRepository.findByTagCode(tagCode)
             .orElseThrow(() -> new BusinessException(ErrorCode.TAG_NOT_FOUND));
-        return ChatHistoryResponse.of(messages, remaining, ChatCredit.DEFAULT_LIMIT);
+        return ChatHistoryResponse.of(messages, credit.getRemaining(), credit.getLimit());
     }
 
     // message가 없는 프리셋 전용 요청(칩 클릭)의 user 메시지 content — ChatMessage.content는 NOT NULL이라

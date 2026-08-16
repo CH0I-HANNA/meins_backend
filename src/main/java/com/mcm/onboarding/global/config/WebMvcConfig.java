@@ -27,6 +27,7 @@ public class WebMvcConfig implements WebMvcConfigurer {
             // 소유권 등록(POST /api/tags/*/ownership)은 인증 전 단계라 여기 포함되지 않는다.
             .addPathPatterns(
                 "/api/tags/*/ownership/me",
+                "/api/tags/*/ownership/transfer-code",
                 "/api/tags/*/chat",
                 "/api/tags/*/chat/**"
             );
