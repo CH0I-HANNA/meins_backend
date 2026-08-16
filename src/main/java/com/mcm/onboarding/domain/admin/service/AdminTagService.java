@@ -141,6 +141,20 @@ public class AdminTagService {
         }
     }
 
+    // ownership_records.tag_id가 tags에 대한 FK라 태그보다 먼저 지워야 한다.
+    // ownership_attempts/chat_credits/chat_messages는 tag_code 문자열 컬럼(FK 아님)이라 순서 무관하지만 함께 정리한다.
+    @Transactional
+    public void deleteTag(String tagCode) {
+        Tag tag = findTagOrThrow(tagCode);
+        String canonicalTagCode = tag.getTagCode();
+
+        ownershipAttemptRepository.deleteByTagCode(canonicalTagCode);
+        ownershipRepository.deleteByTag_TagCode(canonicalTagCode);
+        chatCreditRepository.deleteByTagCode(canonicalTagCode);
+        chatMessageRepository.deleteByTagCode(canonicalTagCode);
+        tagRepository.delete(tag);
+    }
+
     private Tag findTagOrThrow(String tagCode) {
         return tagRepository.findByTagCode(CodeNormalizer.normalize(tagCode))
             .orElseThrow(() -> new BusinessException(ErrorCode.TAG_NOT_FOUND));
