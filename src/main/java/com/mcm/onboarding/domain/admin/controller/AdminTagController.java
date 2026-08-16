@@ -95,4 +95,18 @@ public class AdminTagController {
         adminTagService.forceStatus(tagCode, request.action());
         return ResponseEntity.ok().build();
     }
+
+    @Operation(summary = "태그 개별 삭제", description = "태그와 연관된 소유권 기록/시도 이력/채팅 크레딧/채팅 메시지를 함께 삭제합니다. 태그가 속한 제품(product)은 삭제하지 않습니다.")
+    @ApiResponses({
+        @ApiResponse(responseCode = "204", description = "삭제 성공"),
+        @ApiResponse(responseCode = "404", description = "존재하지 않는 태그 (TAG_NOT_FOUND)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    })
+    @DeleteMapping("/tags/{tagCode}")
+    public ResponseEntity<Void> deleteTag(
+        @Parameter(description = "QR 코드 값", example = "AB3D-9F2K") @PathVariable String tagCode
+    ) {
+        adminTagService.deleteTag(tagCode);
+        return ResponseEntity.noContent().build();
+    }
 }
