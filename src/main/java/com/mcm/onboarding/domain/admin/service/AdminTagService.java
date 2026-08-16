@@ -80,8 +80,13 @@ public class AdminTagService {
         LocalDateTime now = KstTime.now();
         return tagRepository.findAll().stream()
             // 잠금은 (태그, IP)별이므로 "현재 잠긴 시도 이력이 하나라도 있으면" 잠김으로 표시한다.
-            .map(tag -> AdminTagResponse.of(tag,
-                ownershipAttemptRepository.existsByTagCodeAndLockedUntilAfter(tag.getTagCode(), now)))
+            .map(tag -> AdminTagResponse.of(
+                tag,
+                ownershipAttemptRepository.existsByTagCodeAndLockedUntilAfter(tag.getTagCode(), now),
+                ownershipRepository.findByTag_TagCode(tag.getTagCode())
+                    .orElseThrow(() -> new BusinessException(ErrorCode.INTERNAL_ERROR)),
+                now
+            ))
             .toList();
     }
 
