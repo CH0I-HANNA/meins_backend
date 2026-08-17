@@ -48,4 +48,10 @@ public class ChatCredit {
         this.limit = TRANSFER_LIMIT;
         this.updatedAt = now;
     }
+
+    // 관리자 CS 대응용 — 이력/한도는 건드리지 않고 남은 크레딧만 현재 한도까지 재충전한다.
+    public void refillToLimit(LocalDateTime now) {
+        this.remaining = this.limit;
+        this.updatedAt = now;
+    }
 }
