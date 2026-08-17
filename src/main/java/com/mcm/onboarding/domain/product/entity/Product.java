@@ -37,14 +37,19 @@ public class Product {
 
     private Integer heightCm;
 
+    @Column(length = 1000)
     private String imageUrl;
 
+    @Column(length = 1000)
     private String thumbnailImageUrl1;
 
+    @Column(length = 1000)
     private String thumbnailImageUrl2;
 
+    @Column(length = 1000)
     private String thumbnailImageUrl3;
 
+    @Column(length = 1000)
     private String productPageUrl;
 
     @Column(nullable = false)
