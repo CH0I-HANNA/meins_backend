@@ -2,7 +2,6 @@ package com.mcm.onboarding.domain.chat.service;
 
 import com.mcm.onboarding.common.exception.BusinessException;
 import com.mcm.onboarding.common.exception.ErrorCode;
-import com.mcm.onboarding.domain.chat.entity.ChatCredit;
 import com.mcm.onboarding.domain.chat.repository.ChatCreditRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -44,6 +43,6 @@ public class CreditGuardService {
     // 클라이언트 중단은 명세상 차감 대상이므로 여기로 오지 않는다.
     @Transactional
     public void refundCredit(String tagCode) {
-        chatCreditRepository.incrementCredit(tagCode, ChatCredit.DEFAULT_LIMIT);
+        chatCreditRepository.incrementCredit(tagCode);
     }
 }
