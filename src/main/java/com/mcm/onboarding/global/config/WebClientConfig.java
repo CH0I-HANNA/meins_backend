@@ -8,18 +8,16 @@ import org.springframework.web.reactive.function.client.WebClient;
 @Configuration
 public class WebClientConfig {
 
-    @Value("${llm.api.base-url:https://api.openai.com/v1}")
-    private String llmBaseUrl;
-
-    @Value("${llm.api.key:}")
-    private String llmApiKey;
+    @Value("${ai.chat.base-url}")
+    private String aiChatBaseUrl;
 
     @Bean
-    public WebClient llmApiWebClient() {
+    public WebClient aiChatWebClient() {
         return WebClient.builder()
-            .baseUrl(llmBaseUrl)
-            .defaultHeader("Authorization", "Bearer " + llmApiKey)
+            .baseUrl(aiChatBaseUrl)
             .defaultHeader("Content-Type", "application/json")
+            // ngrok 무료 터널은 프로그램에서 보내는 요청에도 경고 인터스티셜 HTML을 끼워 넣으므로 우회 헤더 필요.
+            .defaultHeader("ngrok-skip-browser-warning", "true")
             .build();
     }
 }

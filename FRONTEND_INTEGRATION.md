@@ -4,11 +4,11 @@
 
 ## 0. 기본 정보
 
-- Base URL: `http://localhost:8080` (배포 도메인 확정 시 교체)
+- Base URL: 로컬 `http://localhost:8080` / 배포 `https://meinsbackend-production.up.railway.app`
 - 모든 요청/응답 Content-Type: `application/json` (챗 스트리밍 응답만 `text/event-stream`)
 - 시간 기준: **KST**. 게스트에게 나가는 시각은 `YYYY-MM`, 오너 응답은 ISO 8601 오프셋(`2026-03-14T09:22:00+09:00`)
 - 인증 방식 2가지:
-  - **오너 토큰**: `Authorization: Bearer mcm:own:{tagCode}:{authCode}` — 소유권 등록 후 발급. 태그 1개에만 묶이므로 `localStorage`에 태그별로 분리 저장(`mcm:own:{tagCode}`)
+  - **오너 토큰**: `Authorization: Bearer mcm:own:{tagCode}:{ownerSecret}` — 소유권 등록(또는 이전) 응답의 `token`을 그대로 저장했다가 쓰면 된다. **`ownerSecret`은 서버가 등록/이전 때마다 새로 발급하는 랜덤값으로, 실물에 적힌 인증 코드(`code`)와는 다른 값이다** — 프론트가 직접 조립할 필요 없이 응답의 `token` 필드를 그대로 쓸 것. 태그 1개에만 묶이므로 `localStorage`에 태그별로 분리 저장(`mcm:own:{tagCode}`)
   - **관리자 키**: `X-Admin-Key: {ADMIN_KEY}` — `/admin/**`에만 사용 (내부 운영 도구 전용)
 
 ### 화면 1개 = 호출 1개
@@ -19,6 +19,7 @@
 | 03 코드 입력 | `POST /api/tags/{tagCode}/ownership` 1회 |
 | 04 오너 홈 | `GET /api/tags/{tagCode}/ownership/me` 1회 |
 | 05 소유권 | 추가 호출 없음 (04 응답 재사용) |
+| 05 → 소유권 이전(양도) | 판매자: `POST .../ownership/transfer-code`(발급) / `DELETE .../ownership/transfer-code`(취소) — 구매자: `POST .../ownership/transfer` |
 | 06 챗 | `GET .../chat/history` 1회 + 발화당 `POST .../chat` |
 
 ## 0-1. 코드 포맷
@@ -53,6 +54,7 @@
 | `CREDIT_EXHAUSTED` | 429 | 챗 크레딧 소진 | 하드코딩 문구 |
 | `ADMIN_KEY_INVALID` | 401 | 관리자 키 불일치 (내부 도구 전용) | — |
 | `ADMIN_INVALID_ACTION` | 400 | 잘못된 force-status action (내부 도구 전용) | — |
+| `REQUEST_CONFLICT` | 409 | 더블클릭/재시도로 동일 요청이 겹침 | 잠깐 뒤 재시도 안내 (자동 재시도 X) |
 | `INTERNAL_ERROR` | 500 | 서버 내부 오류 | 토스트 |
 
 `TAG_NOT_FOUND` / `TAG_INVALID_FORMAT`은 **모두 같은 화면**으로 처리한다(원인 특정과 무관). 열거 방지를 위해 message도 동일하다.
@@ -229,7 +231,64 @@ while (true) {
 
 **응답 코드**: `200` + `text/event-stream` / `429` `CREDIT_EXHAUSTED` / `401` `TOKEN_INVALID`
 
-> **참고 (미해결)**: 서버는 현재 실제 LLM 대신 더미 텍스트를 150ms 간격으로 스트리밍한다(`LlmWebClient` 자리표시자).
+> **AI 연동 완료**: 실제 AI(RAG 기반) 서버가 연동되어 더미 응답이 아닌 실제 답변이 스트리밍된다. **프론트 쪽 요청/응답 포맷은 위와 완전히 동일** — 백엔드가 내부적으로 어떤 AI 서버를 호출하는지는 프론트가 신경 쓸 필요 없다.
+
+## 2-6. 소유권 이전 (05, 판매자→구매자)
+
+중고로 거래된 제품의 소유권을 이전 소유자 → 새 소유자로 넘긴다. 이전 완료 시 **챗 이력은 승계되지 않고, 크레딧은 15턴(기존 30턴보다 적음)으로 재발급**되며, 이전 소유자의 토큰은 즉시 무효화된다.
+
+### (a) 이전 코드 발급/재조회 — 판매자(현재 오너)가 호출
+
+```
+POST /api/tags/{tagCode}/ownership/transfer-code
+Authorization: Bearer {token}
+```
+
+**응답 200**
+```json
+{
+  "code": "F26T59QR9D3K",
+  "issuedAt": "2026-03-14T09:22:00+09:00",
+  "expiresAt": "2026-03-15T09:22:00+09:00"
+}
+```
+- 이미 발급된 활성 코드가 있으면 **재발급하지 않고 같은 코드를 그대로 반환**한다 — 이전 모달을 다시 열어도 같은 코드가 보이면 정상.
+- 발급 후 24시간 지나면 자동 만료.
+- 에러: `TOKEN_INVALID` (401).
+
+### (b) 이전 코드 발급 취소 — 판매자가 호출
+
+```
+DELETE /api/tags/{tagCode}/ownership/transfer-code
+Authorization: Bearer {token}
+```
+**응답 204** (활성 코드가 없어도 성공 처리). 취소 후 (a)를 다시 호출하면 새 코드가 발급된다.
+
+### (c) 이전받기 — 구매자(새 오너)가 호출
+
+```
+POST /api/tags/{tagCode}/ownership/transfer
+Content-Type: application/json
+
+{ "code": "F26T59QR9D3K" }
+```
+**인증 불필요** (새 오너는 아직 토큰이 없으므로). `code`는 판매자에게 (a)에서 받은 이전 코드.
+
+**응답 200** — 등록(2-2)과 동일한 모양
+```json
+{
+  "token": "mcm:own:A1B2-C3D4:NEW_OWNER_SECRET",
+  "record": { "registeredAt": "2026-03-14T09:22:00+09:00" }
+}
+```
+새 `token`을 등록 때와 동일하게 `localStorage`(`mcm:own:{tagCode}`)에 저장한다. **이전 소유자가 갖고 있던 예전 토큰은 이 시점부터 즉시 무효화**된다.
+
+**에러 처리**
+- `CODE_MISMATCH` (400) + `remainingAttempts` — 만료/취소/불일치된 코드 전부 여기로 수렴한다(활성 코드 존재 여부가 노출되지 않도록). 등록 화면과 동일하게 처리.
+- `CODE_LOCKED` (429) + `lockedUntil` — 등록 화면과 동일한 5회/24시간 잠금 정책(등록 시도 잠금과 `tagCode+ip` 단위로 카운터 공유).
+- `TAG_NOT_FOUND` (404) / `TAG_INVALID_FORMAT` (400).
+
+> 이전 후 `GET .../chat/history` 응답의 `credits.limit`이 새 소유자는 `15`로 내려온다(기존 오너는 `30`). 프론트가 하드코딩된 값(30)을 쓰지 말고 이 응답값을 그대로 표시해야 하는 이유.
 
 ## 3. 관리자 도구
 
@@ -239,9 +298,12 @@ while (true) {
 |---|---|
 | 제품 등록 + QR 일괄 발급 | `POST /admin/tags/bulk-create` |
 | 태그 목록 조회 | `GET /admin/tags` |
+| 태그 개별 삭제 | `DELETE /admin/tags/{tagCode}` |
 | QR 이미지 단건 (PNG) | `GET /admin/qr/{tagCode}` |
 | QR 이미지 전체 (zip) | `GET /admin/tags/qr-export` |
 | 상태 강제 변경 (잠금해제/데모) | `POST /admin/tags/{tagCode}/force-status` |
+
+`GET /admin/tags` 응답 항목에 CS 대응용 소유권 이전 정보가 포함된다: `transferCount`(누적 이전 횟수), `hasActiveTransferCode`(발급된 이전 코드 활성 여부), `transferCodeExpiresAt`(활성 코드 없으면 필드 자체 생략).
 
 `POST /admin/tags/bulk-create` request body 예시:
 ```json
@@ -267,8 +329,6 @@ while (true) {
 
 - **소유권 카드 이미지** `GET /api/tags/{tagCode}/ownership/card.png` — 미구현
 - **OG 태그 제어** (공유 링크 미리보기) — 미구현
-- **소유권 코드 재발급** `POST .../ownership/reissue` — MVP 범위 밖(설계만)
+- **소유권 코드 재발급** `POST .../ownership/reissue` — MVP 범위 밖(설계만). 소유권 **이전**(2-6)과는 다른 기능이니 혼동 주의
 - **IP 시간당 상한** (`RATE_LIMITED`) — 미구현
 - **크레딧 자동 회복(롤링 리셋)** — 미구현. 소진 시 관리자 `force-status`로만 복구 가능하며 `resetAt`도 내려가지 않는다
-- **실제 LLM 연동** — 미구현 (2-5 참고, 더미 응답만 스트리밍됨)
-- **CORS 설정** — 미설정. 프론트가 다른 도메인에서 호출하려면 백엔드 설정이 필요하다

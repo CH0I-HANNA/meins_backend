@@ -32,14 +32,6 @@ public class ChatHarnessService {
     private final ChatMessageRepository chatMessageRepository;
     private final ChatCreditRepository chatCreditRepository;
 
-    private static final String GUARDRAIL_PROMPT = """
-        [가드레일 규칙 — 절대 위반 금지]
-        1. 가품/정품 판정 금지: 어떠한 경우에도 제품의 진위를 판단하거나 암시하지 마시오.
-        2. 가격 산정 금지: 현재 시세, 리셀 가격, 감정가를 언급하거나 추정하지 마시오.
-        3. 리셀 시세 언급 금지: 중고 거래 플랫폼의 가격 정보를 절대 언급하지 마시오.
-        당신은 MCM 제품의 라이프스타일 어시스턴트입니다. 위 규칙을 위반하는 질문에는 정중히 거절하시오.
-        """;
-
     public SseEmitter streamChat(String rawTagCode, ChatRequest request) {
         String tagCode = CodeNormalizer.normalize(rawTagCode);
 
@@ -56,7 +48,9 @@ public class ChatHarnessService {
         creditGuardService.reserveCredit(tagCode);
 
         // ── Layer 2: 컨텍스트 조립 — DB 직접 조회, 프론트 신뢰 금지 ──
-        String systemPrompt = buildSystemPrompt(tagCode, request.preset());
+        // AI 서버는 modelCode로 자체 RAG DB에서 제품 정보를 찾으므로, tagCode → modelCode 매핑만
+        // 서버가 직접 조회해서 넘긴다(프론트가 modelCode를 임의로 지정하지 못하게).
+        String modelCode = resolveModelCode(tagCode);
 
         // 사용자 발화는 LLM 호출을 실제로 시도하는 시점에 남긴다.
         // free-text가 없으면(preset만 전송) 칩 라벨을 그대로 기록해 히스토리에서 빈 말풍선이 없게 한다.
@@ -73,7 +67,7 @@ public class ChatHarnessService {
         // ── Layer 3: LLM 스트리밍 실행 ──
         // preset 전용 요청(칩 클릭)은 message가 null이다 — 그대로 넘기면 요청 바디 조립 시점에
         // NPE가 나므로, 히스토리에 남긴 것과 같은 값(칩 라벨)을 LLM에도 보낸다.
-        Disposable subscription = llmWebClient.streamCompletion(systemPrompt, resolveUserContent(request))
+        Disposable subscription = llmWebClient.streamCompletion(modelCode, resolveUserContent(request))
             .subscribe(
                 chunk -> {
                     assistantContent.append(chunk);
@@ -127,43 +121,28 @@ public class ChatHarnessService {
         if (request.message() != null && !request.message().isBlank()) {
             return request.message();
         }
-        String label = presetOf(request.preset()).chipLabel();
+        String label = chipLabel(request.preset());
         return label != null ? label : "(빈 메시지)";
     }
 
-    // preset 문자열 → 칩 라벨/시스템 프롬프트 컨텍스트 매핑을 한 곳에만 둔다. 이전엔 이 스위치가
-    // resolveUserContent()와 buildSystemPrompt()에 각각 따로 있어서, preset을 추가/변경할 때
-    // 한쪽만 고치면 채팅 히스토리와 실제 LLM 컨텍스트가 서로 어긋날 수 있었다.
-    private Preset presetOf(String preset) {
+    private String chipLabel(String preset) {
         return switch (preset != null ? preset : "") {
-            case "care"     -> new Preset("케어", "- 사용자 요청 유형: 가방 관리법 및 보관법 안내 [care]");
-            case "style"    -> new Preset("스타일", "- 사용자 요청 유형: 스타일링 및 코디 조언 [style]");
-            case "heritage" -> new Preset("헤리티지", "- 사용자 요청 유형: MCM 브랜드 헤리티지 및 제품 역사 안내 [heritage]");
-            default         -> new Preset(null, "- 사용자 요청 유형: 일반 문의");
+            case "care"     -> "케어";
+            case "style"    -> "스타일";
+            case "heritage" -> "헤리티지";
+            default         -> null;
         };
     }
 
-    private record Preset(String chipLabel, String systemContext) {}
-
-    private String buildSystemPrompt(String tagCode, String preset) {
+    // AI 서버가 modelCode로 자체 RAG DB를 조회하므로, tagCode → modelCode 매핑은 프론트를 신뢰하지 않고
+    // 서버가 직접 DB에서 찾아 채운다.
+    private String resolveModelCode(String tagCode) {
         Tag tag = tagRepository.findByTagCode(tagCode)
             .orElseThrow(() -> new BusinessException(ErrorCode.TAG_NOT_FOUND));
-        var product = tag.getProduct();
-
-        String dimensions = (product.getWidthCm() != null && product.getDepthCm() != null && product.getHeightCm() != null)
-            ? "%d x %d x %d cm".formatted(product.getWidthCm(), product.getDepthCm(), product.getHeightCm())
-            : "정보 없음";
-
-        String productContext = """
-            [제품 컨텍스트 — 서버 주입]
-            - 제품명: %s
-            - 소재: %s
-            - 색상: %s
-            - 사이즈(가로x세로x높이): %s
-            """.formatted(product.getProductName(), product.getMaterial(), product.getColor(), dimensions);
-
-        String presetContext = presetOf(preset).systemContext();
-
-        return GUARDRAIL_PROMPT + "\n" + productContext + "\n" + presetContext;
+        String modelCode = tag.getProduct().getModelCode();
+        if (modelCode == null || modelCode.isBlank()) {
+            throw new BusinessException(ErrorCode.INTERNAL_ERROR);
+        }
+        return modelCode;
     }
 }

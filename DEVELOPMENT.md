@@ -132,17 +132,16 @@ Layer 3 (실행)       LlmWebClient.streamCompletion() → SseEmitter로 청크 
 ## 7. 설정 (`application.properties`)
 
 - MySQL 연결 정보(`meins_onboarding` 스키마), `ddl-auto=update`로 엔티티 변경 시 자동 스키마 반영.
-- `llm.api.base-url`/`llm.api.key`로 LLM 연동 설정을 외부화(현재 key는 비어있음 — `LlmWebClient`가 더미 응답만 반환하는 이유).
+- `ai.chat.base-url`로 AI 담당자 RAG 서버 주소를 외부화 (`LlmWebClient`가 `{base-url}/chat/stream`에 `{modelCode, message}`를 POST).
 - SSE 비동기 타임아웃 120초(`spring.mvc.async.request-timeout`), `SseEmitter` 자체 타임아웃은 60초로 코드에 별도 설정.
-- `spring.datasource.password`, `llm.api.key` 등 민감값은 `${ENV_VAR:default}` 플레이스홀더로 분리되어 있고, 실제 값은 `application.properties`(커밋 대상)가 아니라 `.idea/workspace.xml`의 `MeinsOnboardingApplication` Run Configuration(`.idea`는 `.gitignore` 대상)에만 존재한다.
+- `spring.datasource.password` 등 민감값은 `${ENV_VAR:default}` 플레이스홀더로 분리되어 있고, 실제 값은 `application.properties`(커밋 대상)가 아니라 `.idea/workspace.xml`의 `MeinsOnboardingApplication` Run Configuration(`.idea`는 `.gitignore` 대상)에만 존재한다.
 
 | 환경변수 | 필수 여부 | 기본값 |
 |---|---|---|
 | `DB_URL` | 선택 | `jdbc:mysql://localhost:3306/meins_onboarding?...` |
 | `DB_USERNAME` | 선택 | `root` |
 | `DB_PASSWORD` | **필수** (기본값 없음) | 없음 |
-| `LLM_API_BASE_URL` | 선택 | `https://api.openai.com/v1` |
-| `LLM_API_KEY` | 선택 | 빈 문자열 (더미 응답만 동작) |
+| `AI_CHAT_BASE_URL` | **필수** | AI 담당자 RAG 서버 주소. ngrok 무료 터널은 재시작마다 URL이 바뀌므로 갱신 필요 |
 | `ADMIN_KEY` | **필수** (기본값 없음) | 없음 — `/admin/**` 호출 시 `X-Admin-Key` 헤더 값과 비교 |
 | `QR_URL_TEMPLATE` | 선택 | `{tagCode}` (QR에 tagCode 원문만 인코딩) |
 
@@ -152,7 +151,6 @@ Layer 3 (실행)       LlmWebClient.streamCompletion() → SseEmitter로 청크 
 
 ## 8. 미완성 / TODO
 
-- `LlmWebClient`: 더미 스트리밍 → 실제 OpenAI(or 다른 LLM) 스트리밍 API로 교체 필요 (연동 예시 코드는 주석으로 이미 준비됨).
 - **크레딧 자동 회복(롤링 리셋) 없음** — 회복 주기가 미확정이라 구현하지 않았다. 확정되면 `credits.resetAt`과 `CREDIT_EXHAUSTED`의 `resetAt`을 함께 채운다.
 - **IP 시간당 상한(`RATE_LIMITED`) 미구현**, **CORS 설정 없음**.
 - 소유권 카드 이미지(`card.png`), OG 태그 제어, 판매 미등록 상태(`TAG_NOT_RELEASED`) 미구현.
