@@ -76,14 +76,17 @@ public class AdminTagController {
     @Operation(
         summary = "태그 상태 강제 변경",
         description = """
-            잠금 해제(운영) 또는 등록 상태 강제 세팅(데모 준비)에 사용합니다.
+            잠금 해제(운영), 등록 상태 강제 세팅(데모 준비), 크레딧 재충전(CS)에 사용합니다.
             - UNLOCK: 잠금/실패횟수만 초기화
             - UNLOCK_RECOVERY: 잠금 해제 + 등록 이력 초기화
             - REGISTERED / UNREGISTERED: 데모용 상태 강제 세팅
+            - RESET_CREDIT: 챗 이력·소유 정보는 그대로 두고 남은 크레딧만 현재 한도까지 재충전 (등록된 적 없는 태그에는 400)
             """
     )
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "변경 성공"),
+        @ApiResponse(responseCode = "400", description = "지원하지 않거나 현재 상태에 적용할 수 없는 action (ADMIN_INVALID_ACTION)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "존재하지 않는 태그 (TAG_NOT_FOUND)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })

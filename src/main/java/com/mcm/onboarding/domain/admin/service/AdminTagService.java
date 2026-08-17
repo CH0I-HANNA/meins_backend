@@ -142,6 +142,14 @@ public class AdminTagService {
                 chatCreditRepository.deleteByTagCode(canonicalTagCode);
                 chatMessageRepository.deleteByTagCode(canonicalTagCode);
             }
+            // 챗 이력/소유 레코드는 그대로 두고 남은 크레딧만 현재 한도(limit)까지 재충전한다.
+            // 등록된 적 없는(크레딧 row가 아예 없는) 태그에는 적용할 수 없다.
+            case RESET_CREDIT -> {
+                ChatCredit credit = chatCreditRepository.findByTagCode(canonicalTagCode)
+                    .orElseThrow(() -> new BusinessException(ErrorCode.ADMIN_INVALID_ACTION));
+                credit.refillToLimit(now);
+                chatCreditRepository.save(credit);
+            }
             default -> throw new BusinessException(ErrorCode.ADMIN_INVALID_ACTION);
         }
     }
