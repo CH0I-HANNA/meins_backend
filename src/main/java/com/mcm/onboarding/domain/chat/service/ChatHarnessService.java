@@ -58,7 +58,11 @@ public class ChatHarnessService {
             ChatMessage.of(tagCode, "user", resolveUserContent(request), request.preset(), KstTime.now())
         );
 
-        SseEmitter emitter = new SseEmitter(60_000L);
+        // AI(RAG) 서버 응답이 60초를 넘는 질문이 실제로 있어, 60초로는 onComplete(히스토리 저장)까지
+        // 못 가고 AsyncRequestTimeoutException으로 끊기는 사례가 확인됨 — 클라이언트엔 이미 전송된
+        // 청크가 남아 "답변은 나왔는데 히스토리엔 없음"으로 보였다. spring.mvc.async.request-timeout과
+        // 맞춰 180초로 상향.
+        SseEmitter emitter = new SseEmitter(180_000L);
         StringBuilder assistantContent = new StringBuilder();
         // subscribe()가 반환하는 Disposable을 subscribe() 내부(onNext)에서도 즉시 취소하려면
         // 대입 완료 전에 참조해야 하는 순환이 생긴다 — 참조를 담을 그릇을 미리 만들어 우회한다.

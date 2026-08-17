@@ -8,6 +8,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestTimeoutException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -52,6 +53,14 @@ public class GlobalExceptionHandler {
         ErrorCode ec = ErrorCode.REQUEST_CONFLICT;
         return ResponseEntity.status(ec.getHttpStatus())
             .body(ErrorResponse.of(ec.getCode(), ec.getMessage(), null, null, null));
+    }
+
+    // SSE 스트리밍(챗) 도중 SseEmitter 타임아웃을 넘기면 발생. 응답이 이미 text/event-stream으로
+    // 커밋된 상태라 여기서 JSON ErrorResponse 바디를 쓰려 하면 HttpMessageNotWritableException이
+    // 한 번 더 발생해 로그만 더러워진다(catch-all Exception 핸들러에 맡겼을 때의 증상). 아무 것도
+    // 쓰지 않고 Spring의 기본 처리에 맡긴다.
+    @ExceptionHandler(AsyncRequestTimeoutException.class)
+    public void handleAsyncRequestTimeout(AsyncRequestTimeoutException e) {
     }
 
     @ExceptionHandler(Exception.class)
