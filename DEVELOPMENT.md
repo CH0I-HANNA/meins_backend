@@ -63,19 +63,20 @@ com.mcm.onboarding
 `ChatHarnessService.streamChat()`이 하네스의 핵심 오케스트레이터로, CLAUDE.md에 명시된 3계층 순서를 그대로 코드로 구현한다.
 
 ```
-Layer 1 (가드레일)  CreditGuardService.checkCredit()
+Layer 1 (가드레일)  CreditGuardService.checkCredit() / reserveCredit()
                      └─ remaining <= 0 이면 LLM 호출 전에 즉시 CREDIT_EXHAUSTED(429)
-Layer 2 (컨텍스트)   buildSystemPrompt(tagCode, preset)
-                     └─ DB에서 Tag 재조회 → 가드레일 상수 + 제품 컨텍스트 + 프리셋 컨텍스트 조립
+Layer 2 (컨텍스트)   resolveModelCode(tagCode)
+                     └─ DB에서 Tag → Product.modelCode 조회해 AI 서버에 넘길 값만 채움
                      └─ 프론트가 보낸 컨텍스트는 절대 신뢰하지 않고 서버가 tagCode로 직접 조회
-Layer 3 (실행)       LlmWebClient.streamCompletion() → SseEmitter로 청크 전달
+Layer 3 (실행)       LlmWebClient.streamCompletion(modelCode, message) → SseEmitter로 청크 전달
 ```
 
-- **가드레일 프롬프트**는 `GUARDRAIL_PROMPT` 상수로 고정되어 매 요청마다 시스템 프롬프트 최상단에 강제 주입된다 (가품 판정 금지 / 가격 산정 금지 / 리셀 시세 언급 금지).
-- **프리셋**: `care`(관리법) / `style`(스타일링) / `heritage`(브랜드 헤리티지) 중 하나를 요청 시 지정하면 해당 문맥이 시스템 프롬프트에 추가된다. 없으면 "일반 문의"로 처리.
+- **가드레일과 제품 컨텍스트 조립은 AI 서버 책임**이다. 원래는 백엔드가 `GUARDRAIL_PROMPT` 상수(가품 판정 금지 / 가격 산정 금지 / 리셀 시세 언급 금지)와 제품·프리셋 컨텍스트를 시스템 프롬프트로 조립해 주입했지만, AI 담당자 RAG 서버 연동(PR #12) 이후 그 로직은 제거됐다 — 새 계약(`{modelCode, message}`)에는 시스템 프롬프트를 실어 보낼 자리가 없고, AI 서버가 공식 홈페이지 기반 RAG + 자체 프롬프트로 같은 가드레일을 처리한다.
+- **프리셋**: `care`(관리법) / `style`(스타일링) / `heritage`(브랜드 헤리티지). 백엔드는 이제 preset을 프롬프트로 번역하지 않고, 칩 라벨(`"케어"`/`"스타일"`/`"헤리티지"`)을 `message`로 변환해 AI 서버에 보내고 히스토리에도 같은 값을 남긴다(`resolveUserContent()`). `message`와 `preset`이 둘 다 없으면 크레딧 차감 전에 `VALIDATION_FAILED`로 거른다.
 - **크레딧 차감**: LLM 호출 직전에 `reserveCredit()`으로 1턴을 선차감한다(`@Transactional` + 원자적 UPDATE `remaining = remaining - 1 WHERE remaining > 0`, 영향 row 수로 소진 판정 — 조회와 차감 사이 레이스를 여기서 닫는다). 명세상 "호출 실패 시 미차감"이므로 LLM 스트림이 에러로 끝나는 `onError` 경로에서만 `refundCredit()`으로 되돌린다. 정상 완료와 클라이언트 중단(abort)은 명세상 모두 차감 대상이라 되돌리지 않는다.
 - **연결 끊김(Abort) 대응**: `emitter.onCompletion/onTimeout/onError`에서 모두 `subscription.dispose()`를 호출해, 클라이언트가 연결을 끊어도 서버가 붙잡고 있던 LLM WebClient 구독을 즉시 취소한다. 불필요한 LLM 비용 지출을 막기 위한 장치.
-- `LlmWebClient`는 현재 실제 LLM 호출 대신 더미 텍스트를 150ms 간격으로 스트리밍하는 자리표시자 구현이며, 코드 내 주석으로 실제 OpenAI `/chat/completions` 스트리밍 연동 예시가 남겨져 있다.
+- `LlmWebClient`는 AI 담당자 RAG 서버(`POST {AI_CHAT_BASE_URL}/chat/stream`, body `{modelCode, message}`)를 호출하고, SSE 청크(`{"type":"delta","text":"..."}` / `{"type":"done"}`)에서 `delta`의 `text`만 뽑아 `Flux<String>`으로 중계한다. 더미 스트리밍 구현은 제거됐다(PR #4에서 OpenAI 직접 호출로, PR #12에서 다시 AI 서버 프록시로 교체). AI 서버가 `done`을 보낸 뒤 연결을 닫지 않는 경우가 있어 `takeUntil(Chunk::done)`으로 우리가 스스로 스트림을 끝낸다 — 안 그러면 `onComplete`를 못 타 히스토리 저장이 통째로 빠진다(PR #15).
+- **스트리밍 도중 에러는 표준 에러 바디로 못 내려간다.** `SseEmitter`를 반환한 시점에 `200 text/event-stream`이 커밋되므로 `GlobalExceptionHandler`를 타지 못하고, `emitter.completeWithError()`로 연결만 끊긴다. 이건 첫 청크 전에도, 일부 청크를 보낸 뒤에도(네트워크 단절 / 180초 타임아웃) 발생할 수 있어 클라이언트에는 **잘린 응답**으로 보일 수 있다. 원인 추적을 위해 `LlmWebClient`의 `doOnError`/`doOnCancel`과 `ChatHarnessService`의 각 콜백에 로깅이 붙어 있다. 클라이언트가 정상 완료와 중간 끊김을 구분할 수 있게 하는 종료 이벤트는 아직 없다 → `chat.md` 3절 남은 작업.
 - `GET /api/tags/{tagCode}/chat/history` — 오너 전용. `{ messages: [{role, content, createdAt}], credits: { remaining, limit } }` 형태로 대화 내역과 크레딧 잔량을 함께 반환한다(프론트는 `remaining <= 2`일 때 안내 문구를 띄운다). 크레딧 회복 정책이 미확정이라 `credits.resetAt`은 현재 항상 생략된다. `messages`는 `tagCode` 기준으로 서버에 저장된 실제 대화 내역이다(재진입 시 복원됨).
 
 ## 4. 인증
@@ -133,7 +134,7 @@ Layer 3 (실행)       LlmWebClient.streamCompletion() → SseEmitter로 청크 
 
 - MySQL 연결 정보(`meins_onboarding` 스키마), `ddl-auto=update`로 엔티티 변경 시 자동 스키마 반영.
 - `ai.chat.base-url`로 AI 담당자 RAG 서버 주소를 외부화 (`LlmWebClient`가 `{base-url}/chat/stream`에 `{modelCode, message}`를 POST).
-- SSE 비동기 타임아웃 120초(`spring.mvc.async.request-timeout`), `SseEmitter` 자체 타임아웃은 60초로 코드에 별도 설정.
+- SSE 비동기 타임아웃 180초(`spring.mvc.async.request-timeout=180000`), `SseEmitter` 자체 타임아웃도 코드에서 같은 180초(`new SseEmitter(180_000L)`)로 맞춘다 — 둘이 어긋나면 짧은 쪽이 먼저 끊어 히스토리 저장이 빠진다(PR #14).
 - `spring.datasource.password` 등 민감값은 `${ENV_VAR:default}` 플레이스홀더로 분리되어 있고, 실제 값은 `application.properties`(커밋 대상)가 아니라 `.idea/workspace.xml`의 `MeinsOnboardingApplication` Run Configuration(`.idea`는 `.gitignore` 대상)에만 존재한다.
 
 | 환경변수 | 필수 여부 | 기본값 |
@@ -159,7 +160,7 @@ Layer 3 (실행)       LlmWebClient.streamCompletion() → SseEmitter로 청크 
 
 ### 완료됨
 - ~~`com.example.luxury` 기본 애플리케이션 클래스 정리~~ — 삭제 완료. 해당 패키지의 `LuxuryApplicationTests`가 `@SpringBootConfiguration`을 찾지 못해 `./gradlew test`가 실패하던 상태였음. 삭제 후 `com.mcm.onboarding.McmOnboardingApplicationTests`로 컨텍스트 로딩 스모크 테스트를 대체 추가. 이때 `.idea/workspace.xml`에 남아있던 `LuxuryApplication` Run Configuration도 함께 정리.
-- ~~DB/LLM 관련 민감 설정값의 환경변수 분리~~ — `application.properties`를 `${DB_PASSWORD}`, `${LLM_API_KEY:}` 등 플레이스홀더로 교체. 실제 값은 IntelliJ Run Configuration에만 저장(`.idea`는 gitignore 대상이라 커밋되지 않음).
+- ~~DB/LLM 관련 민감 설정값의 환경변수 분리~~ — `application.properties`를 `${DB_PASSWORD}`, `${AI_CHAT_BASE_URL:...}` 등 플레이스홀더로 교체(당시엔 `${LLM_API_KEY:}`였으나 AI 서버 프록시 전환으로 사라졌다). 실제 값은 IntelliJ Run Configuration에만 저장(`.idea`는 gitignore 대상이라 커밋되지 않음).
 - ~~관리자 흐름(제품 등록 → 태그 일괄 생성 → QR 발급/다운로드 → 상태 강제 변경) 구현~~ — `domain/product`, `domain/admin` 신설. `Tag`를 `Product` 참조 구조로 리팩터링하고, `OwnershipRecord`를 Tag와 1:1로 항상 존재하도록 변경. `curl`로 전체 흐름(생성 → 목록 → QR PNG/zip → 등록 → 5회 실패 잠금 → UNLOCK/UNLOCK_RECOVERY/REGISTERED/UNREGISTERED) 수동 검증 완료.
 - ~~OwnershipService의 `OwnershipRecord == null` 방어 로직 제거~~ — bulk-create 시점에 1:1 보장되므로 불필요해짐.
 - ~~`authCode` 2차 인증 적용~~ — `POST /ownership`이 body의 `authCode`를 `Tag.authCode`와 대조해야만 등록 진행. 토큰도 `mcm:own:{tagCode}:{authCode}`로 변경하고 `OwnerAuthInterceptor`가 매 요청마다 DB에서 authCode+`status==REGISTERED`를 실제 검증하도록 수정 — 이전엔 tagCode(QR 공개값)만 알면 등록 절차 없이 `/home`·`/chat` 접근이 가능했던 구멍을 막음. 부수 효과로 `UNLOCK_RECOVERY` 이후 예전 토큰도 `status` 체크에서 즉시 무효화됨(예전에 4-1에 적어뒀던 한계가 해소됨).
