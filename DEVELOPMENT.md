@@ -75,7 +75,7 @@ Layer 3 (실행)       LlmWebClient.streamCompletion() → SseEmitter로 청크 
 - **프리셋**: `care`(관리법) / `style`(스타일링) / `heritage`(브랜드 헤리티지) 중 하나를 요청 시 지정하면 해당 문맥이 시스템 프롬프트에 추가된다. 없으면 "일반 문의"로 처리.
 - **크레딧 차감**: LLM 호출 직전에 `reserveCredit()`으로 1턴을 선차감한다(`@Transactional` + 원자적 UPDATE `remaining = remaining - 1 WHERE remaining > 0`, 영향 row 수로 소진 판정 — 조회와 차감 사이 레이스를 여기서 닫는다). 명세상 "호출 실패 시 미차감"이므로 LLM 스트림이 에러로 끝나는 `onError` 경로에서만 `refundCredit()`으로 되돌린다. 정상 완료와 클라이언트 중단(abort)은 명세상 모두 차감 대상이라 되돌리지 않는다.
 - **연결 끊김(Abort) 대응**: `emitter.onCompletion/onTimeout/onError`에서 모두 `subscription.dispose()`를 호출해, 클라이언트가 연결을 끊어도 서버가 붙잡고 있던 LLM WebClient 구독을 즉시 취소한다. 불필요한 LLM 비용 지출을 막기 위한 장치.
-- `LlmWebClient`는 OpenAI `/chat/completions`를 `stream=true`로 호출하고, 응답을 `ServerSentEvent<String>`으로 받아(수동 줄 파싱 대신 Spring의 SSE 지원 사용) 각 청크의 `choices[0].delta.content`만 추출해 흘려보낸다. `[DONE]`과 content가 없는 첫/마지막 청크는 필터링된다. 모델은 `llm.api.model`(기본 `gpt-4o-mini`), `temperature`는 코드에 `0.7` 고정. **Jackson은 `tools.jackson`(Jackson 3)을 쓴다** — Boot 4.1이 자동 설정하는 `ObjectMapper` 빈이 Jackson 3뿐이라 `com.fasterxml.jackson.databind.ObjectMapper`를 주입하면 컴파일은 통과해도 기동에 실패한다.
+- `LlmWebClient`는 현재 실제 LLM 호출 대신 더미 텍스트를 150ms 간격으로 스트리밍하는 자리표시자 구현이며, 코드 내 주석으로 실제 OpenAI `/chat/completions` 스트리밍 연동 예시가 남겨져 있다.
 - `GET /api/tags/{tagCode}/chat/history` — 오너 전용. `{ messages: [{role, content, createdAt}], credits: { remaining, limit } }` 형태로 대화 내역과 크레딧 잔량을 함께 반환한다(프론트는 `remaining <= 2`일 때 안내 문구를 띄운다). 크레딧 회복 정책이 미확정이라 `credits.resetAt`은 현재 항상 생략된다. `messages`는 `tagCode` 기준으로 서버에 저장된 실제 대화 내역이다(재진입 시 복원됨).
 
 ## 4. 인증
@@ -132,18 +132,16 @@ Layer 3 (실행)       LlmWebClient.streamCompletion() → SseEmitter로 청크 
 ## 7. 설정 (`application.properties`)
 
 - MySQL 연결 정보(`meins_onboarding` 스키마), `ddl-auto=update`로 엔티티 변경 시 자동 스키마 반영.
-- `llm.api.base-url`/`llm.api.key`/`llm.api.model`로 LLM 연동 설정을 외부화. `LlmWebClient`는 실제 OpenAI 스트리밍을 호출하므로 **key가 비어 있으면 챗이 401로 죽는다**(더미 폴백 없음).
+- `ai.chat.base-url`로 AI 담당자 RAG 서버 주소를 외부화 (`LlmWebClient`가 `{base-url}/chat/stream`에 `{modelCode, message}`를 POST).
 - SSE 비동기 타임아웃 120초(`spring.mvc.async.request-timeout`), `SseEmitter` 자체 타임아웃은 60초로 코드에 별도 설정.
-- `spring.datasource.password`, `llm.api.key` 등 민감값은 `${ENV_VAR:default}` 플레이스홀더로 분리되어 있고, 실제 값은 `application.properties`(커밋 대상)가 아니라 `.idea/workspace.xml`의 `MeinsOnboardingApplication` Run Configuration(`.idea`는 `.gitignore` 대상)에만 존재한다.
+- `spring.datasource.password` 등 민감값은 `${ENV_VAR:default}` 플레이스홀더로 분리되어 있고, 실제 값은 `application.properties`(커밋 대상)가 아니라 `.idea/workspace.xml`의 `MeinsOnboardingApplication` Run Configuration(`.idea`는 `.gitignore` 대상)에만 존재한다.
 
 | 환경변수 | 필수 여부 | 기본값 |
 |---|---|---|
 | `DB_URL` | 선택 | `jdbc:mysql://localhost:3306/meins_onboarding?...` |
 | `DB_USERNAME` | 선택 | `root` |
 | `DB_PASSWORD` | **필수** (기본값 없음) | 없음 |
-| `LLM_API_BASE_URL` | 선택 | `https://api.openai.com/v1` |
-| `LLM_API_KEY` | 기동에는 선택, **챗 사용 시 필수** | 빈 문자열 (이 상태로 챗을 호출하면 OpenAI가 401 → 스트림 끊김) |
-| `LLM_API_MODEL` | 선택 | `gpt-4o-mini` |
+| `AI_CHAT_BASE_URL` | **필수** | AI 담당자 RAG 서버 주소. ngrok 무료 터널은 재시작마다 URL이 바뀌므로 갱신 필요 |
 | `ADMIN_KEY` | **필수** (기본값 없음) | 없음 — `/admin/**` 호출 시 `X-Admin-Key` 헤더 값과 비교 |
 | `QR_URL_TEMPLATE` | 선택 | `{tagCode}` (QR에 tagCode 원문만 인코딩) |
 
@@ -153,7 +151,6 @@ Layer 3 (실행)       LlmWebClient.streamCompletion() → SseEmitter로 청크 
 
 ## 8. 미완성 / TODO
 
-- `LlmWebClient`: 실제 OpenAI 스트리밍 연동 완료(PR #4). 남은 건 Railway `LLM_API_KEY` 주입, AI 담당자 프롬프트 문구 병합, 스트리밍 에러 로깅 — `chat.md` 참고.
 - **크레딧 자동 회복(롤링 리셋) 없음** — 회복 주기가 미확정이라 구현하지 않았다. 확정되면 `credits.resetAt`과 `CREDIT_EXHAUSTED`의 `resetAt`을 함께 채운다.
 - **IP 시간당 상한(`RATE_LIMITED`) 미구현**, **CORS 설정 없음**.
 - 소유권 카드 이미지(`card.png`), OG 태그 제어, 판매 미등록 상태(`TAG_NOT_RELEASED`) 미구현.

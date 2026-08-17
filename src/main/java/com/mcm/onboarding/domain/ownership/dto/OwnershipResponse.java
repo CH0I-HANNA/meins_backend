@@ -19,9 +19,9 @@ public record OwnershipResponse(
         String registeredAt
     ) {}
 
-    public static OwnershipResponse of(String tagCode, String authCode, LocalDateTime registeredAt) {
+    public static OwnershipResponse of(String tagCode, String ownerSecret, LocalDateTime registeredAt) {
         return new OwnershipResponse(
-            "mcm:own:" + tagCode + ":" + authCode,
+            "mcm:own:" + tagCode + ":" + ownerSecret,
             new RegisteredRecord(KstTime.toIso(registeredAt))
         );
     }

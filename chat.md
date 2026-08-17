@@ -1,60 +1,46 @@
 # 챗 기능
 
-AI 담당자가 프롬프트/모델을 확정하지 못한 상태에서 백엔드가 어떻게 먼저 진행했고, 지금 무엇이 붙어 있고 무엇이 남았는지 정리한 문서.
+AI 담당자가 프롬프트/모델을 아직 확정하지 못한 상태에서, 백엔드는 어떻게 계속 개발을 진행하고 나중에 무엇을 연결할지 정리한 문서.
 
-## 1. 지금 상태: LLM 연동 완료, 프롬프트 문구만 남음
+## 1. 지금 상태: 하네스는 이미 완성, LLM만 자리표시자
 
-`ChatHarnessService.streamChat()`이 처리하는 3계층이 전부 실제 구현으로 채워졌다.
+`ChatHarnessService.streamChat()`이 처리하는 3계층 중 Layer 1(크레딧)·Layer 2(컨텍스트 조립)는 완성돼 있고, Layer 3(LLM 실행)만 더미다.
 
 ```
 Layer 1 (가드레일)  CreditGuardService.checkCredit() / reserveCredit()   ✅ 완성
-Layer 2 (컨텍스트)   ChatHarnessService.buildSystemPrompt()               ✅ 완성 (문구는 임시)
-Layer 3 (실행)       LlmWebClient.streamCompletion()                     ✅ OpenAI 스트리밍 (PR #4, 2026-08-14)
+Layer 2 (컨텍스트)   ChatHarnessService.buildSystemPrompt()               ✅ 완성
+Layer 3 (실행)       LlmWebClient.streamCompletion()                     ⏳ 더미 (150ms 간격 고정 텍스트)
 ```
 
-인증, 크레딧 차감/환불, DB 컨텍스트 주입, SSE 스트리밍, 대화 히스토리 저장까지 전부 실제로 동작한다. 남은 건 `GUARDRAIL_PROMPT`를 AI 담당자가 검증한 문구로 교체하는 것뿐이다.
+즉 **AI 파트가 없어도 인증, 크레딧 차감, DB 컨텍스트 주입, SSE 스트리밍, 대화 히스토리 저장까지 전부 실제로 동작한다.** AI 담당자 작업물을 기다리지 않고도 프론트 연동·QA·데모 리허설이 가능한 이유가 이거다.
 
-> **`LLM_API_KEY`가 없으면 챗이 동작하지 않는다.** PR #4에서 더미 응답이 제거됐기 때문에, 키가 비어 있으면 `Bearer ` 헤더로 요청이 나가 OpenAI가 401을 돌려주고 스트림이 끊긴다. 로컬 개발·프론트 SSE 연동 테스트에도 키가 필요하다.
+## 2. AI 파트가 나오기 전까지 우리가 할 일
 
-## 2. AI 파트를 기다리는 동안 한 일 (기록)
-
-- **통합 지점(interface)을 먼저 고정했다.** `streamCompletion(String systemPrompt, String userMessage) -> Flux<String>` 시그니처를 확정해둔 덕분에, 실제 연동은 `LlmWebClient` 한 파일 교체로 끝났다. 크레딧·컨텍스트·SSE 계층은 손대지 않았다.
-- **더미 스트리밍으로 나머지를 전부 검증했다.** 프론트 SSE 연동, abort 처리, 히스토리 조회, 크레딧 소진 흐름을 AI 파트 없이 먼저 끝냈다. (더미는 PR #4에서 제거됐다 — 위 경고 참고)
-- **AI 담당자에게 코드가 아니라 3가지를 요청한다.**
+- **더미로 계속 개발/테스트 진행.** `LlmWebClient.streamCompletion()`을 건드리지 않고 프론트 SSE 연동, abort 처리, 히스토리 조회, 크레딧 소진 흐름을 전부 검증한다.
+- **통합 지점(interface)을 고정해둔다.** `streamCompletion(String systemPrompt, String userMessage) -> Flux<String>` 시그니처를 지금 확정해두면, AI 담당자가 어떤 모델/파라미터를 들고 오든 이 함수 내부만 교체하면 된다. 다른 계층(크레딧, 컨텍스트, SSE)은 손댈 필요 없음.
+- **AI 담당자한테 코드가 아니라 3가지를 요청한다** (자세한 배경은 대화 로그 참고):
   1. 검증된 시스템 프롬프트 문구 (톤·가드레일 지시·few-shot 예시가 있다면 그것까지)
   2. 모델명 + 파라미터 (`model`, `temperature` 등)
   3. API 키 (Slack/코드로 공유 금지, Railway Variables에만)
-- AI 담당자 레포가 실제 서버가 아니라면(프롬프트 실험 스크립트라면) **별도로 배포하지 않는다.** 크레딧/인증/컨텍스트 주입이 반드시 우리 백엔드에서 일어나야 하므로, 중간에 별도 서버를 끼우면 홉만 늘고 얻는 게 없다. → 우리 백엔드가 OpenAI를 직접 호출하는 구조로 간다.
+- AI 담당자 레포가 실제 서버가 아니라면(프롬프트 실험 스크립트라면) **별도로 배포하지 않는다.** 크레딧/인증/컨텍스트 주입이 반드시 우리 백엔드에서 일어나야 하므로, 중간에 별도 서버를 끼우면 홉만 늘고 얻는 게 없다.
+- **(갱신) 실제로는 AI 담당자가 자체 RAG 서버를 별도로 배포**해왔다 — `POST {base-url}/chat/stream`, body `{modelCode, message}`, SSE로 `{"type":"delta","text":"..."}` / `{"type":"done"}` 스트리밍. 위 원칙대로 프론트가 이 서버에 직접 붙지 않고, **우리 백엔드가 클라이언트로서 호출하는 구조**를 유지한다 — 크레딧 차감/오너 인증은 여전히 우리 쪽에서만 일어나고, `modelCode`도 프론트가 아니라 백엔드가 `tagCode`로 DB 조회해서 채운다.
+- **가드레일 처리 주체가 바뀜**: AI 담당자가 공식 홈페이지 정보만으로 RAG DB를 구성하고, 거기서 못 찾는 정보·가격 관련 질문은 "알려드릴 수 없다, 공식 홈페이지 참고"로 답하도록 자체 프롬프트에서 처리했다고 확인함. 그래서 우리 쪽 `GUARDRAIL_PROMPT`/`buildSystemPrompt()`(가품 판정·가격·리셀 시세 금지 문구를 시스템 프롬프트로 강제 주입하던 코드)는 제거했다 — 새 API 계약(`modelCode` + `message`뿐)에는애초에 시스템 프롬프트를 실어 보낼 자리가 없다.
 
-## 3. 체크리스트
+## 3. AI 파트 연동 상태 (완료)
 
-- [x] `LlmWebClient.streamCompletion()` 실제 구현으로 교체 — `WebClient`가 `ServerSentEvent<String>`으로 SSE를 직접 파싱하도록 구현(수동 줄 파싱 대신 Spring의 SSE 지원 사용), Jackson으로 각 청크의 `choices[0].delta.content`만 추출. `[DONE]`과 role-only/finish_reason-only 빈 청크는 필터링됨
-- [x] 모델명 env var로 분리 — `llm.api.model` (`LLM_API_MODEL`, 기본값 `gpt-4o-mini`). `temperature`는 `LlmWebClient` 내부에 `0.7`로 하드코딩(자주 바꿀 값이 아니라 판단, 필요해지면 같은 방식으로 env var화)
-- [x] 크레딧 환불 정책 — LLM **호출이 실패하면 선차감한 1턴을 환불**한다(PR #3). 정상 종료·클라이언트 중단은 1턴 차감 유지. 기획 명세 2-5 "호출 실패 시 미차감"과 일치
-- [ ] **Railway에 `LLM_API_KEY` 설정** — 안 하면 배포본의 챗이 401로 죽는다. 최우선
-- [ ] `ChatHarnessService.buildSystemPrompt()`의 `GUARDRAIL_PROMPT` / 제품 컨텍스트 / preset 컨텍스트에 AI 담당자가 검증한 프롬프트 문구 병합 — AI 담당자 결과물 도착 후 진행
-- [ ] **스트리밍 에러 로깅 추가** — 현재 OpenAI가 401/429/5xx를 돌려줘도 `emitter.completeWithError()`로 스트림만 끊기고 서버 로그에 아무것도 남지 않는다. 데모 중 원인 파악이 불가능하므로 최소한 `doOnError` 로깅이 필요하다. `extractDeltaContent()`가 파싱 예외를 빈 문자열로 삼키는 것도 마찬가지
-- [ ] ~~OpenAI 에러를 `BusinessException(ErrorCode)`로 매핑~~ → **구조적으로 불가능해서 방향 수정 필요**: 컨트롤러가 `SseEmitter`를 반환하는 순간 HTTP 200 + `text/event-stream` 헤더가 이미 커밋되기 때문에, 스트리밍 도중 발생하는 OpenAI 에러는 `GlobalExceptionHandler`를 못 타고 `{code,message,traceId}` JSON 바디로 못 내려간다. 지금은 `error -> emitter.completeWithError(error)`가 스트림을 끊는 걸로 그대로 둠 — 프론트가 이 경우(빈 응답으로 스트림 종료)를 어떻게 보여줄지는 별도 논의 필요
-- [ ] `SseEmitter(60_000L)` 타임아웃이 실제 응답 속도에 맞는지 재검토
-- [ ] AI 담당자가 검증했던 질문/시나리오를 실제 API로 재현해 톤·가드레일 준수 여부 확인
+- [x] `LlmWebClient.streamCompletion(modelCode, userMessage)` — AI 서버 `/chat/stream` 계약에 맞춰 재작성. `WebClient`가 `ServerSentEvent<String>`으로 SSE를 파싱하고, 각 청크 JSON의 `type`이 `delta`일 때만 `text`를 추출. `done`/알 수 없는 type은 빈 문자열로 필터링됨
+- [x] `ChatHarnessService`가 `tagCode → modelCode`만 DB에서 조회해 넘기도록 변경 (`resolveModelCode()`). 제품 상세/가드레일 프롬프트 조립 로직은 AI 서버 쪽 책임이라 백엔드에서 제거
+- [ ] OpenAI 대비 에러 응답 형식이 다를 수 있음 — AI 서버 쪽 에러(모델 미존재, 타임아웃 등)가 어떤 형태로 오는지 확인 필요. 구조적 제약은 동일: `SseEmitter` 반환 시점에 HTTP 200이 이미 커밋되므로 스트리밍 도중 에러는 `GlobalExceptionHandler`를 못 타고 스트림이 그냥 끊긴다
+- [x] `SseEmitter` 타임아웃 재검토 — 실제로 RAG 응답이 60초를 넘는 질문에서 `AsyncRequestTimeoutException`으로 스트림이 강제 종료돼, 클라이언트엔 답변이 다 보이는데 `onComplete`(히스토리 저장)까지 못 가서 챗 히스토리에서 그 턴이 통째로 빠지는 버그로 실제 재현됨. `60_000L` → `180_000L`로 상향(`spring.mvc.async.request-timeout`도 동일하게 맞춤). 타임아웃 발생 시 `GlobalExceptionHandler`가 이미 커밋된 SSE 응답에 JSON을 쓰려다 2차 예외를 내던 것도 `AsyncRequestTimeoutException` 전용 핸들러(무응답)로 정리
+- [ ] 크레딧 환불 정책 재확인 — 현재는 LLM 실패해도 환불 없음(스트림 종료/중단 양쪽에서 1턴 차감 보장 원칙대로 설계됨)
+- [ ] AI 담당자 서버가 배포한 실제 환경(ngrok 무료 터널)으로 톤·가드레일 준수 여부 재현 테스트
 
-### 3-1. PR #4 머지 전에 잡은 이슈 2건
-
-둘 다 컴파일은 통과하지만 실행하면 터지는 종류라 기록해둔다.
-
-- **Jackson 2 → Jackson 3** (`f9facdf`): Spring Boot 4.1은 Jackson 3(`tools.jackson`)만 자동 설정한다. `JacksonAutoConfiguration`이 등록하는 빈은 `tools.jackson.databind.json.JsonMapper` 하나뿐이라, `com.fasterxml.jackson.databind.ObjectMapper`를 주입받으면 기동 시 `NoSuchBeanDefinitionException`으로 앱이 뜨지 않는다. Jackson 2 자체는 springdoc 등이 끌고 와 클래스패스에 있어서 **컴파일은 통과한다** — 새 라이브러리를 붙일 때 주의할 지점.
-- **preset 전용 요청 NPE** (`1bf1a7a`): 칩 클릭 시 프론트는 `{ "preset": "care" }`만 보내고 `message`는 null이다. 이 null을 그대로 요청 바디에 넣으면 `Map.of`가 null 값을 거부해 NPE가 난다. 게다가 이 예외는 `subscribe()` 이전 동기 경로에서 터져 환불 콜백을 타지 않으므로 크레딧이 그대로 소멸했다. → 히스토리 저장에 쓰던 `resolveUserContent()`를 LLM 호출에도 사용하도록 통일.
-
-## 4. Railway 배포 시 추가할 환경변수
-
-Railway **Variables** 탭에 추가한다.
+## 4. 환경변수
 
 | 환경변수 | 필수 여부 | 비고 |
 |---|---|---|
-| `LLM_API_KEY` | **필수** | OpenAI API 키. 없으면 챗이 401로 죽는다(더미 폴백 없음). 코드/커밋에 절대 넣지 말 것 |
-| `LLM_API_BASE_URL` | 선택 | 기본값 `https://api.openai.com/v1`, 다른 LLM으로 바꿀 때만 변경 |
-| `LLM_API_MODEL` | 선택 | 기본값 `gpt-4o-mini` |
+| `AI_CHAT_BASE_URL` | **필수** | AI 담당자 RAG 서버 주소. **ngrok 무료 터널은 재시작마다 URL이 바뀌므로, 터널이 재시작되면 반드시 Railway Variables 값도 갱신해야 한다.** 장기적으로는 AI 담당자 쪽도 고정 도메인으로 배포하는 걸 권장 |
 
 ## 5. 요약
 
-백엔드 하네스(인증·크레딧·컨텍스트·SSE)와 LLM 연동이 모두 끝났다. 남은 건 **Railway에 API 키 넣기**와 **AI 담당자의 프롬프트 문구 병합** 두 가지이고, 후자는 `GUARDRAIL_PROMPT` 상수 하나를 바꾸는 좁은 작업이다.
+AI 담당자의 RAG 서버(`/chat/stream`)와 연동 완료. 백엔드 하네스(인증·크레딧·SSE)는 그대로 유지되고, 컨텍스트 조립 책임(제품 정보 조회·가드레일 프롬프트)은 AI 서버 쪽으로 넘어갔다 — 백엔드는 `tagCode → modelCode` 매핑만 담당한다.
