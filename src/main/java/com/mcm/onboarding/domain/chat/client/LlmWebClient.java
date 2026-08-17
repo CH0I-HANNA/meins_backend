@@ -1,5 +1,7 @@
 package com.mcm.onboarding.domain.chat.client;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.codec.ServerSentEvent;
@@ -13,6 +15,8 @@ import java.util.Map;
 
 @Component
 public class LlmWebClient {
+
+    private static final Logger log = LoggerFactory.getLogger(LlmWebClient.class);
 
     private final WebClient aiChatWebClient;
     private final ObjectMapper objectMapper;
@@ -44,6 +48,9 @@ public class LlmWebClient {
             // ChatHarnessService의 저장 로직이 통째로 실행 안 되는 문제가 있었다. done 청크 자체를
             // 완료 신호로 취급해 연결 상태와 무관하게 우리가 스스로 스트림을 끝낸다.
             .takeUntil(Chunk::done)
+            .doOnComplete(() -> log.info("AI 서버 스트림 정상 완료(modelCode={})", modelCode))
+            .doOnError(e -> log.warn("AI 서버 스트림 에러(modelCode={})", modelCode, e))
+            .doOnCancel(() -> log.warn("AI 서버 스트림 취소됨(modelCode={})", modelCode))
             .map(Chunk::text)
             .filter(text -> !text.isEmpty());
     }
@@ -54,13 +61,16 @@ public class LlmWebClient {
             JsonNode node = objectMapper.readTree(chunkJson);
             String type = node.path("type").asString("");
             if ("done".equals(type)) {
+                log.info("AI 서버 done 청크 수신: {}", chunkJson);
                 return new Chunk("", true);
             }
             if (!"delta".equals(type)) {
+                log.warn("AI 서버 알 수 없는 type 청크 수신: {}", chunkJson);
                 return new Chunk("", false);
             }
             return new Chunk(node.path("text").asString(""), false);
         } catch (Exception e) {
+            log.warn("AI 서버 청크 JSON 파싱 실패: {}", chunkJson, e);
             return new Chunk("", false);
         }
     }

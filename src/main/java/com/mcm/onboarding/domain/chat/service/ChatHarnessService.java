@@ -14,6 +14,8 @@ import com.mcm.onboarding.domain.chat.repository.ChatMessageRepository;
 import com.mcm.onboarding.domain.tag.entity.Tag;
 import com.mcm.onboarding.domain.tag.repository.TagRepository;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
@@ -25,6 +27,8 @@ import java.util.concurrent.atomic.AtomicReference;
 @Service
 @RequiredArgsConstructor
 public class ChatHarnessService {
+
+    private static final Logger log = LoggerFactory.getLogger(ChatHarnessService.class);
 
     private final CreditGuardService creditGuardService;
     private final LlmWebClient llmWebClient;
@@ -77,10 +81,13 @@ public class ChatHarnessService {
                     assistantContent.append(chunk);
                     try {
                         emitter.send(SseEmitter.event().data(chunk));
-                    } catch (IOException e) {
-                        // 클라이언트가 스트림 중간에 연결을 끊은 경우. completeWithError만으로는
-                        // 업스트림 LLM 구독이 즉시 끊기지 않으므로(onCompletion 콜백을 기다려야 함)
-                        // 여기서 바로 dispose해 CLAUDE.md의 "구독 즉시 취소" 요구를 충족한다.
+                    } catch (Exception e) {
+                        // 클라이언트가 스트림 중간에 연결을 끊은 경우(주로 IOException이지만, emitter가
+                        // 이미 완료/타임아웃된 상태에서 send()를 호출하면 IllegalStateException도 난다 —
+                        // 둘 다 여기서 잡아야 원인을 놓치지 않는다). completeWithError만으로는 업스트림
+                        // LLM 구독이 즉시 끊기지 않으므로(onCompletion 콜백을 기다려야 함) 여기서 바로
+                        // dispose해 CLAUDE.md의 "구독 즉시 취소" 요구를 충족한다.
+                        log.warn("chat SSE send 실패, tagCode={}, 구독 dispose", tagCode, e);
                         emitter.completeWithError(e);
                         Disposable current = subscriptionRef.get();
                         if (current != null) {
@@ -91,22 +98,37 @@ public class ChatHarnessService {
                 error -> {
                     // 명세 2-5 요청사항 3: "호출 실패 시 미차감". 레이스를 닫으려고 선차감해 둔 1턴을
                     // LLM 호출이 실패한 이 경로에서만 되돌린다. 정상 종료/클라이언트 중단은 차감 유지.
+                    log.warn("chat 스트림 error, tagCode={}, 크레딧 환불", tagCode, error);
                     creditGuardService.refundCredit(tagCode);
                     emitter.completeWithError(error);
                 },
                 () -> {
-                    chatMessageRepository.save(
-                        ChatMessage.of(tagCode, "assistant", assistantContent.toString(), request.preset(), KstTime.now())
-                    );
-                    emitter.complete();
+                    log.info("chat 스트림 onComplete, tagCode={}, 응답 길이={}", tagCode, assistantContent.length());
+                    try {
+                        chatMessageRepository.save(
+                            ChatMessage.of(tagCode, "assistant", assistantContent.toString(), request.preset(), KstTime.now())
+                        );
+                        log.info("chat assistant 메시지 저장 완료, tagCode={}", tagCode);
+                    } catch (Exception e) {
+                        log.error("chat assistant 메시지 저장 실패, tagCode={}", tagCode, e);
+                        throw e;
+                    } finally {
+                        emitter.complete();
+                    }
                 }
             );
         subscriptionRef.set(subscription);
 
         // Abort 대응: 클라이언트 연결 끊김 시 LLM WebClient 구독 즉시 취소
         emitter.onCompletion(subscription::dispose);
-        emitter.onTimeout(subscription::dispose);
-        emitter.onError(e -> subscription.dispose());
+        emitter.onTimeout(() -> {
+            log.warn("chat SseEmitter 타임아웃, tagCode={}", tagCode);
+            subscription.dispose();
+        });
+        emitter.onError(e -> {
+            log.warn("chat SseEmitter onError, tagCode={}", tagCode, e);
+            subscription.dispose();
+        });
 
         return emitter;
     }
