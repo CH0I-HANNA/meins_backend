@@ -9,6 +9,7 @@ import com.mcm.onboarding.domain.admin.dto.AdminTagResponse;
 import com.mcm.onboarding.domain.admin.dto.BulkCreateRequest;
 import com.mcm.onboarding.domain.admin.dto.BulkCreateResponse;
 import com.mcm.onboarding.domain.admin.dto.ForceStatusRequest.ForceStatusAction;
+import com.mcm.onboarding.domain.admin.dto.ForceStatusResponse;
 import com.mcm.onboarding.domain.chat.entity.ChatCredit;
 import com.mcm.onboarding.domain.chat.repository.ChatCreditRepository;
 import com.mcm.onboarding.domain.chat.repository.ChatMessageRepository;
@@ -112,7 +113,7 @@ public class AdminTagService {
     }
 
     @Transactional
-    public void forceStatus(String tagCode, ForceStatusAction action) {
+    public ForceStatusResponse forceStatus(String tagCode, ForceStatusAction action) {
         Tag tag = findTagOrThrow(tagCode);
         String canonicalTagCode = tag.getTagCode();
         OwnershipRecord record = ownershipRepository.findByTag_TagCode(canonicalTagCode)
@@ -134,6 +135,9 @@ public class AdminTagService {
                 record.markRegistered("ADMIN_FORCED", now, ownerSecret);
                 chatCreditRepository.findByTagCode(canonicalTagCode)
                     .orElseGet(() -> chatCreditRepository.save(ChatCredit.init(canonicalTagCode, now)));
+                // 이 액션이 새로 발급한 오너 토큰은 여기서만 알 수 있다(다른 조회 API로는 못 얻음) —
+                // 응답에 실어보내지 않으면 관리자가 데모/CS 목적으로 그 오너로 로그인할 방법이 없다.
+                return ForceStatusResponse.withToken("mcm:own:" + canonicalTagCode + ":" + ownerSecret);
             }
             case UNREGISTERED -> {
                 tag.markUnregistered();
@@ -152,6 +156,7 @@ public class AdminTagService {
             }
             default -> throw new BusinessException(ErrorCode.ADMIN_INVALID_ACTION);
         }
+        return ForceStatusResponse.empty();
     }
 
     // ownership_records.tag_id가 tags에 대한 FK라 태그보다 먼저 지워야 한다.

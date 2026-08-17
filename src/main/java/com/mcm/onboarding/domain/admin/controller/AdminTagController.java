@@ -5,6 +5,7 @@ import com.mcm.onboarding.domain.admin.dto.AdminTagResponse;
 import com.mcm.onboarding.domain.admin.dto.BulkCreateRequest;
 import com.mcm.onboarding.domain.admin.dto.BulkCreateResponse;
 import com.mcm.onboarding.domain.admin.dto.ForceStatusRequest;
+import com.mcm.onboarding.domain.admin.dto.ForceStatusResponse;
 import com.mcm.onboarding.domain.admin.service.AdminTagService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -79,24 +80,27 @@ public class AdminTagController {
             잠금 해제(운영), 등록 상태 강제 세팅(데모 준비), 크레딧 재충전(CS)에 사용합니다.
             - UNLOCK: 잠금/실패횟수만 초기화
             - UNLOCK_RECOVERY: 잠금 해제 + 등록 이력 초기화
-            - REGISTERED / UNREGISTERED: 데모용 상태 강제 세팅
+            - REGISTERED: 데모용 상태 강제 세팅. **이때 새로 발급된 오너 토큰이 응답 `token` 필드에 실려온다** —
+              다른 API로는 이 토큰을 다시 얻을 수 없으니 반드시 응답에서 저장해둘 것.
+            - UNREGISTERED: 데모용 상태 강제 리셋 (크레딧/대화이력도 초기화)
             - RESET_CREDIT: 챗 이력·소유 정보는 그대로 두고 남은 크레딧만 현재 한도까지 재충전 (등록된 적 없는 태그에는 400)
+
+            REGISTERED 외의 액션은 응답 바디에 `token` 필드 자체가 없다(생략됨).
             """
     )
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "변경 성공"),
+        @ApiResponse(responseCode = "200", description = "변경 성공 — REGISTERED 액션만 { \"token\": \"...\" } 반환, 그 외는 빈 객체 {}"),
         @ApiResponse(responseCode = "400", description = "지원하지 않거나 현재 상태에 적용할 수 없는 action (ADMIN_INVALID_ACTION)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "존재하지 않는 태그 (TAG_NOT_FOUND)",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     })
     @PostMapping("/tags/{tagCode}/force-status")
-    public ResponseEntity<Void> forceStatus(
+    public ResponseEntity<ForceStatusResponse> forceStatus(
         @Parameter(description = "QR 코드 값", example = "AB3D-9F2K") @PathVariable String tagCode,
         @Valid @RequestBody ForceStatusRequest request
     ) {
-        adminTagService.forceStatus(tagCode, request.action());
-        return ResponseEntity.ok().build();
+        return ResponseEntity.ok(adminTagService.forceStatus(tagCode, request.action()));
     }
 
     @Operation(summary = "태그 개별 삭제", description = "태그와 연관된 소유권 기록/시도 이력/채팅 크레딧/채팅 메시지를 함께 삭제합니다. 태그가 속한 제품(product)은 삭제하지 않습니다.")
