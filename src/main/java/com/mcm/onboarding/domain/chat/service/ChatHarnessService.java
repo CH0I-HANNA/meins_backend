@@ -80,7 +80,14 @@ public class ChatHarnessService {
                 chunk -> {
                     assistantContent.append(chunk);
                     try {
-                        emitter.send(SseEmitter.event().data(chunk));
+                        // Spring의 SseEmitter는 "data:" 뒤에 공백을 붙여주지 않고 값을 그대로 이어붙인다
+                        // (data:Tr). 그런데 프론트(다른 SSE 클라이언트 일반)는 관례적으로 "data: " 뒤에
+                        // 공백이 있다고 가정하고 파싱한다 — 공백 유무가 청크 값 자체(우연히 공백으로
+                        // 시작하는 경우)에 따라 들쭉날쭉해지면 그 가정에 맞는 줄만 살아남고 나머지는
+                        // 통째로 유실된다. 공백을 여기서 항상 명시적으로 붙여 "data: {원본 청크}" 형태를
+                        // 보장한다 — 프론트는 "data: " 6글자만 잘라내면 원본 청크를 그대로 복원할 수 있다
+                        // (trim()은 하면 안 된다 — 청크 자체의 앞뒤 공백이 실제 단어 사이 띄어쓰기다).
+                        emitter.send(SseEmitter.event().data(" " + chunk));
                     } catch (Exception e) {
                         // 클라이언트가 스트림 중간에 연결을 끊은 경우(주로 IOException이지만, emitter가
                         // 이미 완료/타임아웃된 상태에서 send()를 호출하면 IllegalStateException도 난다 —

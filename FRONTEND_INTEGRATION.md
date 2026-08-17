@@ -212,15 +212,27 @@ const response = await fetch(`/api/tags/${tagCode}/chat`, {
 
 const reader = response.body.getReader();
 const decoder = new TextDecoder();
+let buffer = '';
 
 while (true) {
   const { done, value } = await reader.read();
   if (done) break;
-  const chunk = decoder.decode(value);
-  const lines = chunk.split('\n').filter(l => l.startsWith('data:'));
+
+  // 네트워크 상황에 따라 SSE 한 줄이 두 번의 read()에 걸쳐 쪼개져 올 수 있다 —
+  // 마지막(불완전할 수 있는) 줄은 버퍼에 남겨뒀다가 다음 read()의 앞부분과 합친다.
+  buffer += decoder.decode(value, { stream: true });
+  const lines = buffer.split('\n');
+  buffer = lines.pop() ?? '';
+
   for (const line of lines) {
-    const text = line.replace(/^data:\s*/, '');
-    // text를 채팅 말풍선에 append
+    if (!line.startsWith('data: ')) continue;   // 서버가 항상 'data: '(공백 포함)로 보낸다
+    // 'data: '(6글자)만 잘라내고 그 뒤는 절대 trim()하지 않는다 — 청크 자체의
+    // 앞뒤 공백이 실제 단어 사이 띄어쓰기라서, trim()하면 스트리밍 중 텍스트가
+    // 공백 없이 다 붙어버린다(예: "가방을 넣어" → "가방을넣어").
+    const text = line.slice(6);
+    // text를 채팅 말풍선에 append (append만 하고 매 청크마다 새로 만들지 말 것 —
+    // React라면 setMessage(prev => prev + text)처럼 함수형 업데이트를 써야
+    // 짧은 간격으로 몰려오는 업데이트가 서로 덮어쓰지 않는다)
   }
 }
 ```
