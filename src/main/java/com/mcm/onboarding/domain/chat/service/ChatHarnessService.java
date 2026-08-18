@@ -11,6 +11,8 @@ import com.mcm.onboarding.domain.chat.entity.ChatCredit;
 import com.mcm.onboarding.domain.chat.entity.ChatMessage;
 import com.mcm.onboarding.domain.chat.repository.ChatCreditRepository;
 import com.mcm.onboarding.domain.chat.repository.ChatMessageRepository;
+import com.mcm.onboarding.domain.ownership.entity.OwnershipRecord;
+import com.mcm.onboarding.domain.ownership.repository.OwnershipRepository;
 import com.mcm.onboarding.domain.tag.entity.Tag;
 import com.mcm.onboarding.domain.tag.repository.TagRepository;
 import lombok.RequiredArgsConstructor;
@@ -35,6 +37,7 @@ public class ChatHarnessService {
     private final TagRepository tagRepository;
     private final ChatMessageRepository chatMessageRepository;
     private final ChatCreditRepository chatCreditRepository;
+    private final OwnershipRepository ownershipRepository;
 
     public SseEmitter streamChat(String rawTagCode, ChatRequest request) {
         String tagCode = CodeNormalizer.normalize(rawTagCode);
@@ -66,6 +69,10 @@ public class ChatHarnessService {
         // 못 가고 AsyncRequestTimeoutException으로 끊기는 사례가 확인됨 — 클라이언트엔 이미 전송된
         // 청크가 남아 "답변은 나왔는데 히스토리엔 없음"으로 보였다. spring.mvc.async.request-timeout과
         // 맞춰 180초로 상향.
+        // 스트리밍이 진행되는 동안 소유권이 이전될 수 있다. 이전은 히스토리를 비우고 ownerSecret을
+        // 회전시키므로, 시작 시점의 ownerSecret을 들고 있다가 저장 직전에 대조한다(아래 onComplete).
+        String ownerSecretAtStart = currentOwnerSecret(tagCode);
+
         SseEmitter emitter = new SseEmitter(180_000L);
         StringBuilder assistantContent = new StringBuilder();
         // subscribe()가 반환하는 Disposable을 subscribe() 내부(onNext)에서도 즉시 취소하려면
@@ -111,6 +118,14 @@ public class ChatHarnessService {
                 },
                 () -> {
                     log.info("chat 스트림 onComplete, tagCode={}, 응답 길이={}", tagCode, assistantContent.length());
+                    // 스트림 도중 소유권이 이전됐다면 이 답변은 이전 소유자의 대화다. 그대로 저장하면
+                    // 이전 시점에 비워진 히스토리에 assistant 메시지만 홀로 남아(질문은 이미 삭제됨)
+                    // 새 소유자 화면에 남의 대화가 보인다 — 저장을 건너뛴다.
+                    if (!isSameOwner(tagCode, ownerSecretAtStart)) {
+                        log.warn("chat 스트림 완료 시점에 소유자가 바뀜 — assistant 메시지 저장 생략, tagCode={}", tagCode);
+                        emitter.complete();
+                        return;
+                    }
                     try {
                         chatMessageRepository.save(
                             ChatMessage.of(tagCode, "assistant", assistantContent.toString(), request.preset(), KstTime.now())
@@ -165,6 +180,19 @@ public class ChatHarnessService {
             case "heritage" -> "헤리티지";
             default         -> null;
         };
+    }
+
+    // 스트림 시작 시점의 소유자 식별값. 레코드가 없으면(이론상 불가) null을 반환하고, 그 경우
+    // isSameOwner()가 false가 되어 저장을 건너뛰는 안전한 쪽으로 기운다.
+    private String currentOwnerSecret(String tagCode) {
+        return ownershipRepository.findByTag_TagCode(tagCode)
+            .map(OwnershipRecord::getOwnerSecret)
+            .orElse(null);
+    }
+
+    private boolean isSameOwner(String tagCode, String ownerSecretAtStart) {
+        String now = currentOwnerSecret(tagCode);
+        return ownerSecretAtStart != null && ownerSecretAtStart.equals(now);
     }
 
     // AI 서버가 modelCode로 자체 RAG DB를 조회하므로, tagCode → modelCode 매핑은 프론트를 신뢰하지 않고
