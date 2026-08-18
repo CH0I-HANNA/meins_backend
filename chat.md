@@ -30,6 +30,7 @@ Layer 3 (실행)       LlmWebClient.streamCompletion()                     ⏳ �
 
 - [x] `LlmWebClient.streamCompletion(modelCode, userMessage)` — AI 서버 `/chat/stream` 계약에 맞춰 재작성. `WebClient`가 `ServerSentEvent<String>`으로 SSE를 파싱하고, 각 청크 JSON의 `type`이 `delta`일 때만 `text`를 추출. `done`/알 수 없는 type은 빈 문자열로 필터링됨
 - [x] `ChatHarnessService`가 `tagCode → modelCode`만 DB에서 조회해 넘기도록 변경 (`resolveModelCode()`). 제품 상세/가드레일 프롬프트 조립 로직은 AI 서버 쪽 책임이라 백엔드에서 제거
+- [x] **스트림 종료 신호를 클라이언트까지 전달** — 스트림 끝에 이름 있는 이벤트를 한 번 보낸다(`event: done` 정상 완료 / `event: error` 서버가 인지한 실패: AI 서버 단절, 180초 타임아웃). 이걸 넣기 전에는 프론트가 정상 완료와 중간 끊김을 구분할 방법이 아예 없어 잘린 답변이 성공처럼 보였다. `data:`를 비워 보내므로 기존 파서(`data: ` 공백 포함으로 거르는 쪽)와 충돌하지 않는다 — 프론트가 대응하기 전에 배포해도 안전하다. 파싱 예시는 `FRONTEND_INTEGRATION.md` 2-5 참고
 - [ ] OpenAI 대비 에러 응답 형식이 다를 수 있음 — AI 서버 쪽 에러(모델 미존재, 타임아웃 등)가 어떤 형태로 오는지 확인 필요. 구조적 제약은 동일: `SseEmitter` 반환 시점에 HTTP 200이 이미 커밋되므로 스트리밍 도중 에러는 `GlobalExceptionHandler`를 못 타고 스트림이 그냥 끊긴다
 - [x] `SseEmitter` 타임아웃 재검토 — 실제로 RAG 응답이 60초를 넘는 질문에서 `AsyncRequestTimeoutException`으로 스트림이 강제 종료돼, 클라이언트엔 답변이 다 보이는데 `onComplete`(히스토리 저장)까지 못 가서 챗 히스토리에서 그 턴이 통째로 빠지는 버그로 실제 재현됨. `60_000L` → `180_000L`로 상향(`spring.mvc.async.request-timeout`도 동일하게 맞춤). 타임아웃 발생 시 `GlobalExceptionHandler`가 이미 커밋된 SSE 응답에 JSON을 쓰려다 2차 예외를 내던 것도 `AsyncRequestTimeoutException` 전용 핸들러(무응답)로 정리
 - [ ] 크레딧 환불 정책 재확인 — 현재는 LLM 실패해도 환불 없음(스트림 종료/중단 양쪽에서 1턴 차감 보장 원칙대로 설계됨)

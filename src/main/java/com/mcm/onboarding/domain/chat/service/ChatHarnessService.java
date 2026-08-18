@@ -32,6 +32,11 @@ public class ChatHarnessService {
 
     private static final Logger log = LoggerFactory.getLogger(ChatHarnessService.class);
 
+    // SSE 종료 신호. 데이터 청크는 "data: {내용}"으로만 나가므로, 이름 있는 이벤트를 쓰면
+    // 기존 클라이언트(= data: 줄만 읽는 파서)와 충돌하지 않는다 — 자세한 배경은 sendTerminalEvent().
+    private static final String DONE_EVENT = "done";
+    private static final String ERROR_EVENT = "error";
+
     private final CreditGuardService creditGuardService;
     private final LlmWebClient llmWebClient;
     private final TagRepository tagRepository;
@@ -114,7 +119,14 @@ public class ChatHarnessService {
                     // LLM 호출이 실패한 이 경로에서만 되돌린다. 정상 종료/클라이언트 중단은 차감 유지.
                     log.warn("chat 스트림 error, tagCode={}, 크레딧 환불", tagCode, error);
                     creditGuardService.refundCredit(tagCode);
-                    emitter.completeWithError(error);
+                    // 스트림이 이미 시작된 뒤라 표준 에러 바디({code,message,traceId})로는 못 내려간다.
+                    // 대신 error 이벤트를 한 번 실어 보내 프론트가 "중간에 끊긴 응답"임을 알 수 있게 한다.
+                    // 전송 자체가 실패하면(클라이언트가 이미 끊었거나 emitter가 닫힌 경우) 기존처럼 끊는다.
+                    if (sendTerminalEvent(emitter, ERROR_EVENT, tagCode)) {
+                        emitter.complete();
+                    } else {
+                        emitter.completeWithError(error);
+                    }
                 },
                 () -> {
                     log.info("chat 스트림 onComplete, tagCode={}, 응답 길이={}", tagCode, assistantContent.length());
@@ -123,6 +135,7 @@ public class ChatHarnessService {
                     // 새 소유자 화면에 남의 대화가 보인다 — 저장을 건너뛴다.
                     if (!isSameOwner(tagCode, ownerSecretAtStart)) {
                         log.warn("chat 스트림 완료 시점에 소유자가 바뀜 — assistant 메시지 저장 생략, tagCode={}", tagCode);
+                        sendTerminalEvent(emitter, DONE_EVENT, tagCode);
                         emitter.complete();
                         return;
                     }
@@ -135,6 +148,8 @@ public class ChatHarnessService {
                         log.error("chat assistant 메시지 저장 실패, tagCode={}", tagCode, e);
                         throw e;
                     } finally {
+                        // 답변을 끝까지 보냈다는 신호. 이 이벤트 없이 끊긴 스트림은 프론트가 실패로 간주한다.
+                        sendTerminalEvent(emitter, DONE_EVENT, tagCode);
                         emitter.complete();
                     }
                 }
@@ -144,7 +159,10 @@ public class ChatHarnessService {
         // Abort 대응: 클라이언트 연결 끊김 시 LLM WebClient 구독 즉시 취소
         emitter.onCompletion(subscription::dispose);
         emitter.onTimeout(() -> {
+            // 180초 타임아웃도 프론트 입장에선 "중간에 끊긴 응답"이다 — 컨테이너가 응답을 닫기 전에
+            // best-effort로 error를 실어 보낸다(이미 닫혔으면 sendTerminalEvent가 조용히 false).
             log.warn("chat SseEmitter 타임아웃, tagCode={}", tagCode);
+            sendTerminalEvent(emitter, ERROR_EVENT, tagCode);
             subscription.dispose();
         });
         emitter.onError(e -> {
@@ -180,6 +198,26 @@ public class ChatHarnessService {
             case "heritage" -> "헤리티지";
             default         -> null;
         };
+    }
+
+    // 스트림의 마지막에 이름 있는 이벤트를 한 번 실어 보낸다("event: done" / "event: error").
+    //
+    // data는 비워 보낸다. Spring은 빈 data를 "data:"(뒤에 공백 없음)로 쓰는데, 청크는 항상
+    // "data: {내용}"(공백 포함)으로 나가므로 기존 프론트 파서가 startsWith("data: ")로 거르면
+    // 이 줄은 자연히 무시되고, "data:"까지만 보고 자르는 파서라도 빈 문자열이 붙을 뿐이라
+    // 말풍선이 오염되지 않는다. 즉 프론트가 대응하기 전에 배포해도 안전하다.
+    //
+    // 전송 성공 여부를 돌려준다 — 실패는 클라이언트가 이미 연결을 끊었다는 뜻이라 호출부가
+    // 그에 맞게(기존처럼 끊기) 처리한다.
+    private boolean sendTerminalEvent(SseEmitter emitter, String eventName, String tagCode) {
+        try {
+            emitter.send(SseEmitter.event().name(eventName).data(""));
+            log.info("chat 종료 이벤트 전송: {}, tagCode={}", eventName, tagCode);
+            return true;
+        } catch (Exception e) {
+            log.warn("chat 종료 이벤트({}) 전송 실패 — 클라이언트가 이미 끊었을 수 있음, tagCode={}", eventName, tagCode, e);
+            return false;
+        }
     }
 
     // 스트림 시작 시점의 소유자 식별값. 레코드가 없으면(이론상 불가) null을 반환하고, 그 경우
