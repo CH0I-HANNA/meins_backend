@@ -213,6 +213,8 @@ const response = await fetch(`/api/tags/${tagCode}/chat`, {
 const reader = response.body.getReader();
 const decoder = new TextDecoder();
 let buffer = '';
+let currentEvent = null;   // 현재 파싱 중인 이벤트 이름(없으면 답변 청크)
+let finished = null;       // 'done' | 'error' | null(비정상 종료)
 
 while (true) {
   const { done, value } = await reader.read();
@@ -225,7 +227,15 @@ while (true) {
   buffer = lines.pop() ?? '';
 
   for (const line of lines) {
-    if (!line.startsWith('data: ')) continue;   // 서버가 항상 'data: '(공백 포함)로 보낸다
+    // 종료 신호는 이름 있는 이벤트로 온다: 'event:done' / 'event:error'
+    if (line.startsWith('event:')) { currentEvent = line.slice(6).trim(); continue; }
+    if (line === '') { currentEvent = null; continue; }   // 빈 줄 = 이벤트 경계
+    if (!line.startsWith('data:')) continue;
+
+    if (currentEvent === 'done')  { finished = 'done';  continue; }   // 답변 완료
+    if (currentEvent === 'error') { finished = 'error'; continue; }   // 서버가 실패를 알림
+
+    // 이름 없는 이벤트 = 답변 청크. 서버는 항상 'data: '(공백 포함)로 보낸다.
     // 'data: '(6글자)만 잘라내고 그 뒤는 절대 trim()하지 않는다 — 청크 자체의
     // 앞뒤 공백이 실제 단어 사이 띄어쓰기라서, trim()하면 스트리밍 중 텍스트가
     // 공백 없이 다 붙어버린다(예: "가방을 넣어" → "가방을넣어").
@@ -235,6 +245,11 @@ while (true) {
     // 짧은 간격으로 몰려오는 업데이트가 서로 덮어쓰지 않는다)
   }
 }
+
+// 루프를 빠져나온 뒤 반드시 확인할 것
+if (finished === 'done')       { /* 정상 완료 */ }
+else if (finished === 'error') { /* 서버가 실패를 알림 → 에러 안내 + 재시도 */ }
+else                           { /* done/error 없이 끊김 → 잘린 응답으로 처리 */ }
 ```
 
 - 중단(`abort`) 시 서버도 LLM 생성을 즉시 취소한다.
@@ -243,7 +258,30 @@ while (true) {
 
 **응답 코드**: `200` + `text/event-stream` / `429` `CREDIT_EXHAUSTED` / `401` `TOKEN_INVALID`
 
-> **AI 연동 완료**: 실제 AI(RAG 기반) 서버가 연동되어 더미 응답이 아닌 실제 답변이 스트리밍된다. **프론트 쪽 요청/응답 포맷은 위와 완전히 동일** — 백엔드가 내부적으로 어떤 AI 서버를 호출하는지는 프론트가 신경 쓸 필요 없다.
+> **AI 연동 완료**: 실제 AI(RAG 기반) 서버가 연동되어 더미 응답이 아닌 실제 답변이 스트리밍된다. **프론트 쪽 요청 포맷은 위와 완전히 동일** — 백엔드가 내부적으로 어떤 AI 서버를 호출하는지는 프론트가 신경 쓸 필요 없다.
+
+### 스트림 종료 신호 (`event: done` / `event: error`)
+
+스트림이 한번 시작되면(`200 text/event-stream` 헤더가 나간 뒤라) 서버는 표준 에러 바디(`{code,message,traceId}`)를 내려줄 수 없다. 위 `429`/`401`은 스트림이 시작되기 **전에** 판정되는 경우만 해당한다. 그래서 스트림의 마지막에 **이름 있는 이벤트를 한 번** 실어 보낸다.
+
+| 마지막에 받은 것 | 의미 | 프론트 처리 |
+|---|---|---|
+| `event: done` | 답변을 끝까지 보냄 | 정상 완료 |
+| `event: error` | 서버가 실패를 인지하고 알림 (AI 서버 단절, 180초 타임아웃 등) | 에러 안내 + 재시도 UI. 이 경우 **크레딧은 환불**된다 |
+| 둘 다 없이 연결 종료 | 서버가 알릴 겨를도 없이 끊김 | 잘린 응답으로 간주 → 재시도 UI |
+
+원문은 이렇게 나간다 (실제 응답을 그대로 캡처한 것):
+
+```
+data: 는
+data:  이렇게
+event:done
+data:
+```
+
+- **종료 이벤트의 `data:`는 항상 비어 있다.** 답변 청크는 `data: `(공백 포함)로만 나가므로, `startsWith('data: ')`로 거르는 파서는 이 줄을 자연히 무시한다 — 즉 아래 파싱 코드로 바꾸기 전에도 말풍선이 오염되지 않는다.
+- **`done`을 못 받고 끝난 스트림은 실패로 처리할 것.** 일부 청크를 받은 뒤 끊기는 경우가 실제로 있어서(AI 서버 ngrok 터널 단절 등), 이걸 확인하지 않으면 잘린 답변이 정상처럼 보인다.
+- 사용자가 `abort()`로 중단한 경우엔 종료 이벤트가 오지 않는다(클라이언트가 먼저 끊었으므로). 중단은 프론트가 이미 알고 있는 상태이니 위 판정에서 제외하면 된다.
 
 ## 2-6. 소유권 이전 (05, 판매자→구매자)
 
