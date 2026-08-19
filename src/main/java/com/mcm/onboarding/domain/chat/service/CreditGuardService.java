@@ -15,6 +15,8 @@ public class CreditGuardService {
 
     // Layer 1 가드레일: LLM 호출 전 반드시 먼저 호출.
     // 소진 시 LLM을 호출하지 않고 429로 끊는다 — 안내 문구는 프론트가 하드코딩한다.
+    // 실제 차감 게이트는 reserveCredit()이고, 이건 태그 존재 여부(TAG_NOT_FOUND)를 가리고
+    // 이미 소진된 걸 미리 알 때 원자적 UPDATE 시도조차 하지 않기 위한 빠른 실패 경로다.
     public void checkCredit(String tagCode) {
         int remaining = chatCreditRepository.findRemainingByTagCode(tagCode)
             .orElseThrow(() -> new BusinessException(ErrorCode.TAG_NOT_FOUND));
@@ -24,9 +26,23 @@ public class CreditGuardService {
         }
     }
 
-    // 스트림 종료/중단 양쪽에서 반드시 호출 (doOnComplete + doOnError)
+    // LLM 호출 직전에 반드시 호출해 원자적으로 1턴을 선차감한다. 조회(checkCredit)와 차감이
+    // 분리돼 있으면 동시 요청 둘 다 조회를 통과해 LLM을 이중 호출할 수 있어, "UPDATE ... WHERE
+    // remaining > 0"의 영향받은 row 수 자체로 성공/실패를 판정한다 — 이 안에서 레이스가 닫힌다.
     @Transactional
-    public void deductCredit(String tagCode) {
-        chatCreditRepository.decrementCredit(tagCode);
+    public void reserveCredit(String tagCode) {
+        int updated = chatCreditRepository.decrementCredit(tagCode);
+        if (updated == 0) {
+            throw BusinessException.creditExhausted(null);
+        }
+    }
+
+    // 명세 2-5 요청사항 3: "차감은 스트림 종료 시(중단 포함), 호출 실패 시 미차감".
+    // 레이스를 닫으려면 차감은 LLM 호출 전에 해야 하는데(reserveCredit), 그러면 호출이
+    // 실패했을 때도 이미 차감된 상태가 된다. 그래서 실패 경로에서만 되돌려 두 요구를 모두 만족시킨다.
+    // 클라이언트 중단은 명세상 차감 대상이므로 여기로 오지 않는다.
+    @Transactional
+    public void refundCredit(String tagCode) {
+        chatCreditRepository.incrementCredit(tagCode);
     }
 }

@@ -4,10 +4,12 @@ import com.mcm.onboarding.common.exception.BusinessException;
 import com.mcm.onboarding.common.exception.ErrorCode;
 import com.mcm.onboarding.common.util.CodeNormalizer;
 import com.mcm.onboarding.common.util.KstTime;
+import com.mcm.onboarding.common.util.RandomCodeGenerator;
 import com.mcm.onboarding.domain.admin.dto.AdminTagResponse;
 import com.mcm.onboarding.domain.admin.dto.BulkCreateRequest;
 import com.mcm.onboarding.domain.admin.dto.BulkCreateResponse;
 import com.mcm.onboarding.domain.admin.dto.ForceStatusRequest.ForceStatusAction;
+import com.mcm.onboarding.domain.admin.dto.ForceStatusResponse;
 import com.mcm.onboarding.domain.chat.entity.ChatCredit;
 import com.mcm.onboarding.domain.chat.repository.ChatCreditRepository;
 import com.mcm.onboarding.domain.chat.repository.ChatMessageRepository;
@@ -24,7 +26,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -37,12 +38,11 @@ public class AdminTagService {
 
     // 태그 코드: 영문+숫자 전부 허용 (QR로 스캔되며 사람이 직접 타이핑하지 않음)
     private static final String TAG_CODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    // 인증 코드: 사람이 직접 입력하므로 혼동되는 0/O/1/I 제외
-    private static final String AUTH_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     private static final int TAG_CODE_LENGTH = 8;   // XXXX-XXXX
     private static final int AUTH_CODE_LENGTH = 12; // XXXXXXXXXXXX (하이픈 없음)
+    // 관리자가 REGISTERED로 강제 세팅할 때도 오너 토큰이 필요하므로 등록 플로우와 동일한 길이로 발급
+    private static final int OWNER_SECRET_LENGTH = 12;
     private static final int GROUP_SIZE = 4;
-    private static final SecureRandom RANDOM = new SecureRandom();
 
     private final ProductRepository productRepository;
     private final TagRepository tagRepository;
@@ -81,8 +81,13 @@ public class AdminTagService {
         LocalDateTime now = KstTime.now();
         return tagRepository.findAll().stream()
             // 잠금은 (태그, IP)별이므로 "현재 잠긴 시도 이력이 하나라도 있으면" 잠김으로 표시한다.
-            .map(tag -> AdminTagResponse.of(tag,
-                ownershipAttemptRepository.existsByTagCodeAndLockedUntilAfter(tag.getTagCode(), now)))
+            .map(tag -> AdminTagResponse.of(
+                tag,
+                ownershipAttemptRepository.existsByTagCodeAndLockedUntilAfter(tag.getTagCode(), now),
+                ownershipRepository.findByTag_TagCode(tag.getTagCode())
+                    .orElseThrow(() -> new BusinessException(ErrorCode.INTERNAL_ERROR)),
+                now
+            ))
             .toList();
     }
 
@@ -108,7 +113,7 @@ public class AdminTagService {
     }
 
     @Transactional
-    public void forceStatus(String tagCode, ForceStatusAction action) {
+    public ForceStatusResponse forceStatus(String tagCode, ForceStatusAction action) {
         Tag tag = findTagOrThrow(tagCode);
         String canonicalTagCode = tag.getTagCode();
         OwnershipRecord record = ownershipRepository.findByTag_TagCode(canonicalTagCode)
@@ -126,9 +131,13 @@ public class AdminTagService {
             }
             case REGISTERED -> {
                 tag.markRegistered();
-                record.markRegistered("ADMIN_FORCED", now);
+                String ownerSecret = RandomCodeGenerator.randomCode(RandomCodeGenerator.ALPHANUMERIC_NO_AMBIGUOUS, OWNER_SECRET_LENGTH);
+                record.markRegistered("ADMIN_FORCED", now, ownerSecret);
                 chatCreditRepository.findByTagCode(canonicalTagCode)
                     .orElseGet(() -> chatCreditRepository.save(ChatCredit.init(canonicalTagCode, now)));
+                // 이 액션이 새로 발급한 오너 토큰은 여기서만 알 수 있다(다른 조회 API로는 못 얻음) —
+                // 응답에 실어보내지 않으면 관리자가 데모/CS 목적으로 그 오너로 로그인할 방법이 없다.
+                return ForceStatusResponse.withToken("mcm:own:" + canonicalTagCode + ":" + ownerSecret);
             }
             case UNREGISTERED -> {
                 tag.markUnregistered();
@@ -137,8 +146,31 @@ public class AdminTagService {
                 chatCreditRepository.deleteByTagCode(canonicalTagCode);
                 chatMessageRepository.deleteByTagCode(canonicalTagCode);
             }
+            // 챗 이력/소유 레코드는 그대로 두고 남은 크레딧만 현재 한도(limit)까지 재충전한다.
+            // 등록된 적 없는(크레딧 row가 아예 없는) 태그에는 적용할 수 없다.
+            case RESET_CREDIT -> {
+                ChatCredit credit = chatCreditRepository.findByTagCode(canonicalTagCode)
+                    .orElseThrow(() -> new BusinessException(ErrorCode.ADMIN_INVALID_ACTION));
+                credit.refillToLimit(now);
+                chatCreditRepository.save(credit);
+            }
             default -> throw new BusinessException(ErrorCode.ADMIN_INVALID_ACTION);
         }
+        return ForceStatusResponse.empty();
+    }
+
+    // ownership_records.tag_id가 tags에 대한 FK라 태그보다 먼저 지워야 한다.
+    // ownership_attempts/chat_credits/chat_messages는 tag_code 문자열 컬럼(FK 아님)이라 순서 무관하지만 함께 정리한다.
+    @Transactional
+    public void deleteTag(String tagCode) {
+        Tag tag = findTagOrThrow(tagCode);
+        String canonicalTagCode = tag.getTagCode();
+
+        ownershipAttemptRepository.deleteByTagCode(canonicalTagCode);
+        ownershipRepository.deleteByTag_TagCode(canonicalTagCode);
+        chatCreditRepository.deleteByTagCode(canonicalTagCode);
+        chatMessageRepository.deleteByTagCode(canonicalTagCode);
+        tagRepository.delete(tag);
     }
 
     private Tag findTagOrThrow(String tagCode) {
@@ -149,7 +181,7 @@ public class AdminTagService {
     private String generateUniqueTagCode() {
         String tagCode;
         do {
-            tagCode = groupWithHyphens(randomCode(TAG_CODE_ALPHABET, TAG_CODE_LENGTH));
+            tagCode = groupWithHyphens(RandomCodeGenerator.randomCode(TAG_CODE_ALPHABET, TAG_CODE_LENGTH));
         } while (tagRepository.existsByTagCode(tagCode));
         return tagCode;
     }
@@ -157,17 +189,9 @@ public class AdminTagService {
     private String generateUniqueAuthCode() {
         String authCode;
         do {
-            authCode = randomCode(AUTH_CODE_ALPHABET, AUTH_CODE_LENGTH);
+            authCode = RandomCodeGenerator.randomCode(RandomCodeGenerator.ALPHANUMERIC_NO_AMBIGUOUS, AUTH_CODE_LENGTH);
         } while (tagRepository.existsByAuthCode(authCode));
         return authCode;
-    }
-
-    private String randomCode(String alphabet, int length) {
-        StringBuilder sb = new StringBuilder(length);
-        for (int i = 0; i < length; i++) {
-            sb.append(alphabet.charAt(RANDOM.nextInt(alphabet.length())));
-        }
-        return sb.toString();
     }
 
     // "ABCDEFGH" -> "ABCD-EFGH" (GROUP_SIZE 단위로 하이픈 삽입)
