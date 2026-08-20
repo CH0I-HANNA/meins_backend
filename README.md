@@ -18,6 +18,10 @@
 
 ---
 
+<img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/993c0507-d6a0-4961-9527-a95a294cbf16" />
+
+<img width="1920" height="1080" alt="Image" src="https://github.com/user-attachments/assets/da5b8e92-c0ac-457f-8456-928b794f502f" />
+
 > **고객이 바뀌어도 제품은 남습니다. Meins는 제품을 여정의 주체로 삼습니다.**
 
 MCM 제품에 부착된 QR/NFC 태그를 스캔하면 소유권을 등록하고, 소유자 전용 AI 컨시어지와 대화할 수 있는 서비스다. 이 레포는 그중 **백엔드**를 담당하지만, 아래 내용은 기획·디자인·프론트엔드·AI 등 어떤 파트가 읽어도 "Meins가 어떤 문제를 풀고 어떻게 돈을 버는 서비스인지" 이해할 수 있도록 정리했다.
